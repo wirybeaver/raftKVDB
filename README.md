@@ -6,4 +6,4 @@ Confusing Points:
 
 Reference:
 1. [Student Guide issued by MIT TA](https://thesquareplanet.com/blog/students-guide-to-raft/)
-2. [raft webpate](https://raft.github.io/)
+2. [raft webpage](https://raft.github.io/)
