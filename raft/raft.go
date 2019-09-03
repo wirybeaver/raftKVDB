@@ -18,6 +18,7 @@ package raft
 //
 
 import (
+	"math/rand"
 	"sync"
 	"time"
 )
@@ -25,8 +26,6 @@ import "raftKVDB/labrpc"
 
 // import "bytes"
 // import "encoding/gob"
-
-
 
 //
 // as each Raft peer becomes aware that successive log entries are
@@ -41,7 +40,7 @@ type ApplyMsg struct {
 }
 
 type LogEntry struct {
-	Term int
+	Term    int
 	Command interface{}
 }
 
@@ -49,6 +48,13 @@ const (
 	FOLLOWER = iota
 	CANDIDATE
 	LEADER
+)
+
+const (
+	HEARTBEATINTERVAL    = 100
+	ELECTIONTIMEOUTFIXED = 400
+	// would scale out to 400, cf. the function randomizeTimeout
+	ELECTIONTIMEOUTRAND  = 100
 )
 
 //
@@ -67,20 +73,19 @@ type Raft struct {
 	CurrentTerm int        // Persisted before responding to RPCs
 	VotedFor    int        // Persisted before responding to RPCs
 	Logs        []LogEntry // Persisted before responding to RPCs
-	commitIndex int   // Volatile state on all servers
-	lastApplied int   // Volatile state on all servers
-	nextIndex   []int // Leader only, reinitialized after election
-	matchIndex  []int // Leader only, reinitialized after election
+	commitIndex int        // Volatile state on all servers
+	lastApplied int        // Volatile state on all servers
+	nextIndex   []int      // Leader only, reinitialized after election
+	matchIndex  []int      // Leader only, reinitialized after election
 
 	// extra field used for the implementation
-	state             int           // follower, candidate or leader
-	electionTimer     *time.Timer   // election timer
-	electionTimeout   time.Duration // 400~800ms
-	heartbeatInterval time.Duration // 100ms
+	state int         // follower, candidate or leader
+	timer *time.Timer // election timer
+	seed  rand.Source
 
-	commitCond  *sync.Cond // for commitIndex update
-	resetTimer  chan struct{} // for reset election timer
-	applyCh chan ApplyMsg // channel to send ApplyMsg
+	commitCh     chan struct{} // for commitIndex update
+	resetTimerCh chan struct{} // for reset election timer
+	applyCh      chan ApplyMsg // channel to send ApplyMsg
 }
 
 // return currentTerm and whether this server
@@ -131,9 +136,6 @@ func (rf *Raft) readPersist(data []byte) {
 	}
 }
 
-
-
-
 //
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
@@ -177,21 +179,17 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.state = FOLLOWER
 	}
 
-	if rf.VotedFor==-1 || rf.VotedFor==args.CandidateID {
-		idx := len(rf.Logs)-1
+	// Suspicious Point. I figure the second condition is necessary to avoid the loss of previous grant reply
+	if rf.VotedFor == -1 || rf.VotedFor == args.CandidateID {
+		idx := len(rf.Logs) - 1
 		localLastLogTerm := rf.Logs[idx].Term
-		localLastLogIndex := idx
-		// localLastLogIndex := idx + snapshot.loglen
-		if args.LastLogTerm > localLastLogTerm || args.Term==localLastLogTerm && args.LastLogIndex >= localLastLogIndex {
+		localLastLogIndex := rf.logIdxLocal2Global(idx)
+		if args.LastLogTerm > localLastLogTerm || args.Term == localLastLogTerm && args.LastLogIndex >= localLastLogIndex {
+			//rf.state = FOLLOWER
 			rf.VotedFor = args.CandidateID
-			rf.state = FOLLOWER
 			reply.VoteGranted = true
-			rf.resetTimer <- struct{}{}
+			rf.resetTimerCh <- struct{}{}
 		}
-		rf.VotedFor = args.CandidateID
-		rf.state = FOLLOWER
-		reply.VoteGranted = true
-		rf.resetTimer <- struct{}{}
 	}
 }
 
@@ -239,15 +237,16 @@ type AppendEntriesArgs struct {
 }
 
 type AppendEntriesReply struct {
-	Term int  // currentTerm, for leader to update itself
-	Success     bool // true if follower contained entry matching prevLogIndex and prevLogTerm
+	Term    int  // currentTerm, for leader to update itself
+	Success bool // true if follower contained entry matching prevLogIndex and prevLogTerm
 
 	// extra info for heartbeat from follower
 	//ConflictTerm int // term of the conflicting entry
 	//FirstIndex   int // the first index it stores for ConflictTerm
+	ConflictIndex int
 }
 
-func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply){
+func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
@@ -262,35 +261,41 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.CurrentTerm = args.Term
 	}
 
+	// Suspicious Point. I figure if a peer MUST rewind back to the FOLLOWER state if it receives
+	// Append Queries with term >= rf.CurrentTerm
 	rf.state = FOLLOWER
 	rf.VotedFor = args.LeaderID
 
-	rf.resetTimer <- struct{}{}
+	rf.resetTimerCh <- struct{}{}
 
-	lastLogIndex := len(rf.Logs)-1
-	//lastLogIndex := len(rf.Logs)-1+snapshot.loglen
+	lastLogIndex := rf.logIdxLocal2Global(len(rf.Logs) - 1)
 	if args.PrevLogIndex > lastLogIndex || rf.Logs[args.PrevLogIndex].Term != args.PrevLogTerm {
 		reply.Success = false
-		return
-	} else {
-		reply.Success = true
-		i := args.PrevLogIndex +1
-		//i := args.PrevLogIndex +1 -snapshot.loglen
-		j := 0
-		for ; i < len(rf.Logs) && j < len(args.Entries); i, j = i+1, j+1 {
-			if rf.Logs[i].Term!=args.Entries[j].Term {
-				break
-			}
+		if lastLogIndex < args.PrevLogIndex {
+			reply.ConflictIndex = lastLogIndex + 1
+		} else {
+			reply.ConflictIndex = args.PrevLogIndex
 		}
+		return
+	}
 
-		if j<len(args.Entries) {
-			rf.Logs = append(rf.Logs[:i], args.Entries[j:]...)
+	reply.Success = true
+	i := rf.logIdxGlobal2Local(args.PrevLogIndex + 1)
+	j := 0
+	for ; i < len(rf.Logs) && j < len(args.Entries); i, j = i+1, j+1 {
+		if rf.Logs[i].Term != args.Entries[j].Term {
+			break
 		}
 	}
 
+	if j < len(args.Entries) {
+		rf.Logs = append(rf.Logs[:i], args.Entries[j:]...)
+	}
+
 	if args.LeaderCommit > rf.commitIndex {
-		rf.commitIndex = min(args.LeaderCommit, lastLogIndex+len(rf.Logs))
-		go func() {rf.commitCond.Broadcast()} ()
+		// Suspicious Point, last of new entries?.
+		rf.commitIndex = min(args.LeaderCommit, rf.logIdxLocal2Global(len(rf.Logs)-1))
+		rf.commitCh <- struct{}{}
 	}
 }
 
@@ -313,7 +318,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := true
 
 	// Your code here (2B).
-
 
 	return index, term, isLeader
 }
@@ -348,19 +352,79 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// Your initialization code here (2A, 2B, 2C).
 
+	rf.CurrentTerm = 0
+	rf.VotedFor = -1
+	// first log index is 1, thus we need a dummy log with index 0
+	rf.Logs = make([]LogEntry, 1)
+	rf.Logs[0] = LogEntry{
+		Term:    0,
+		Command: nil,
+	}
+	rf.lastApplied = 0
+	rf.commitIndex = 0
+	rf.nextIndex = make([]int, len(peers))
+	rf.matchIndex = make([]int, len(peers))
+
+	rf.state = FOLLOWER
+	rf.timer = time.NewTimer(rf.randomizeTimeout())
+	rf.seed = rand.NewSource(int64(rf.me))
+	rf.resetTimerCh = make(chan struct{})
+	rf.commitCh = make(chan struct{}, 100)
+	rf.applyCh = applyCh
+
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
+	go rf.electionDaemon()      // kick off election
+	go rf.applyLogEntryDaemon() // distinguished thread to apply log up through commitIdx
 
 	return rf
 }
 
+func (rf *Raft) electionDaemon() {
+	for {
+		switch rf.state {
+		case FOLLOWER:
+			select {
+				case <-rf.resetTimerCh:
+					rf.resetTimer()
+				case <-rf.timer.C:
+					rf.state = CANDIDATE
+			}
+		case CANDIDATE:
+
+		}
+	}
+}
+
+func (rf *Raft) applyLogEntryDaemon() {
+
+}
 
 // helper function below
-func min(a int, b int) int{
-	if a<b {
+func min(a int, b int) int {
+	if a < b {
 		return a
 	} else {
 		return b
 	}
+}
+
+func (rf *Raft) logIdxLocal2Global(localIdx int) int {
+	return localIdx
+}
+
+func (rf *Raft) logIdxGlobal2Local(globalIdx int) int {
+	return globalIdx
+}
+
+func (rf *Raft) resetTimer() {
+	if !rf.timer.Stop() {
+		<-rf.timer.C
+	}
+	rf.timer.Reset(rf.randomizeTimeout())
+}
+
+func (rf *Raft) randomizeTimeout() time.Duration {
+	return time.Millisecond * time.Duration(ELECTIONTIMEOUTFIXED+rand.New(rf.seed).Intn(ELECTIONTIMEOUTRAND)*4)
 }
