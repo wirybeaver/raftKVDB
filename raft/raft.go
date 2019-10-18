@@ -80,6 +80,7 @@ type Raft struct {
 
 	// extra field used for the implementation
 	state int         // follower, candidate or leader
+	voteCount int     // used for count votes
 	timer *time.Timer // election timer
 	seed  rand.Source
 
@@ -175,8 +176,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	reply.CurrentTerm = args.Term
 	if args.Term > rf.CurrentTerm {
 		rf.CurrentTerm = args.Term
-		rf.VotedFor = -1
-		rf.state = FOLLOWER
+		rf.goBackToFollower()
 	}
 
 	// Suspicious Point. I figure the second condition is necessary to avoid the loss of previous grant reply
@@ -227,6 +227,30 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
+func (rf *Raft) sendRequestVoteAndProcess (args *RequestVoteArgs, sendTo int) {
+	reply := &RequestVoteReply{}
+	ok := rf.sendRequestVote(sendTo, args, reply)
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if !ok || rf.state!=CANDIDATE || reply.CurrentTerm < rf.CurrentTerm {
+		return
+	}
+	if reply.CurrentTerm > rf.CurrentTerm {
+		rf.goBackToFollower()
+		rf.resetTimerCh <- struct{}{}
+		return
+	}
+
+	// it indicated ok == true && reply.CurrentTerm == rf.CurrentTerm && rf.state==CANDIDATE
+	rf.VotedFor++
+	if rf.VotedFor > len(rf.peers)/2 {
+		rf.state = LEADER
+		// todo
+		go rf.heartBeatDaemon()
+		rf.resetTimerCh <- struct{}{}
+	}
+}
+
 type AppendEntriesArgs struct {
 	Term         int        // leader's term
 	LeaderID     int        // so follower can redirect clients
@@ -261,11 +285,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.CurrentTerm = args.Term
 	}
 
-	// Suspicious Point. I figure if a peer MUST rewind back to the FOLLOWER state if it receives
+	// Suspicious Point. I figure a peer MUST rewind back to the FOLLOWER state if it receives
 	// Append Queries with term >= rf.CurrentTerm
-	rf.state = FOLLOWER
-	rf.VotedFor = args.LeaderID
-
+	rf.goBackToFollower()
 	rf.resetTimerCh <- struct{}{}
 
 	lastLogIndex := rf.logIdxLocal2Global(len(rf.Logs) - 1)
@@ -383,18 +405,46 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 func (rf *Raft) electionDaemon() {
 	for {
-		switch rf.state {
-		case FOLLOWER:
-			select {
-				case <-rf.resetTimerCh:
-					rf.resetTimer()
-				case <-rf.timer.C:
-					rf.state = CANDIDATE
-			}
-		case CANDIDATE:
-
+		select {
+			case <-rf.resetTimerCh:
+				rf.resetTimer()
+			case <-rf.timer.C:
+				go rf.broadCastVote()
+				rf.timer.Reset(rf.randomizeTimeout())
 		}
+
 	}
+}
+
+func (rf *Raft) broadCastVote() {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	voteReq := &RequestVoteArgs{}
+	rf.CurrentTerm++
+	rf.state = CANDIDATE
+	rf.VotedFor = rf.me
+	rf.voteCount++
+	localIdx := len(rf.Logs)-1
+	voteReq.CandidateID = rf.me
+	voteReq.LastLogIndex = rf.logIdxLocal2Global(localIdx)
+	voteReq.LastLogTerm = rf.Logs[localIdx].Term
+	voteReq.Term = rf.CurrentTerm
+	peerNum := len(rf.peers)
+
+	for i:=0; i<peerNum; i++ {
+		if rf.me != i {
+			continue
+		}
+		go rf.sendRequestVoteAndProcess(voteReq, i)
+	}
+}
+
+func (rf *Raft) heartBeatDaemon(){
+
+}
+
+func (rf *Raft) broadCastAppendLogs() {
+
 }
 
 func (rf *Raft) applyLogEntryDaemon() {
@@ -427,4 +477,11 @@ func (rf *Raft) resetTimer() {
 
 func (rf *Raft) randomizeTimeout() time.Duration {
 	return time.Millisecond * time.Duration(ELECTIONTIMEOUTFIXED+rand.New(rf.seed).Intn(ELECTIONTIMEOUTRAND)*4)
+}
+
+// util function, must be called within critical section
+// sending info to the Channel resetTimer often follows this function
+func (rf *Raft) goBackToFollower(){
+	rf.state = FOLLOWER
+	rf.VotedFor = -1
 }
