@@ -245,7 +245,11 @@ func (rf *Raft) sendRequestVoteAndProcess (args *RequestVoteArgs, sendTo int) {
 	rf.VotedFor++
 	if rf.VotedFor > len(rf.peers)/2 {
 		rf.state = LEADER
-		// todo
+		for i:= range rf.nextIndex{
+			localIdx := len(rf.Logs)-1
+			rf.nextIndex[i] = rf.logIdxLocal2Global(localIdx)+1
+			rf.matchIndex[i] = 0
+		}
 		go rf.heartBeatDaemon()
 		rf.resetTimerCh <- struct{}{}
 	}
@@ -318,6 +322,21 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		// Suspicious Point, last of new entries?.
 		rf.commitIndex = min(args.LeaderCommit, rf.logIdxLocal2Global(len(rf.Logs)-1))
 		rf.commitCh <- struct{}{}
+	}
+}
+
+func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	return ok
+}
+
+func (rf *Raft) sendAppendEntriesAndProcess(args *AppendEntriesArgs, server int) {
+	reply := &AppendEntriesReply{}
+	ok := rf.sendAppendEntries(server, args, reply)
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if !ok || rf.state!=LEADER || reply.Term < rf.CurrentTerm {
+		return
 	}
 }
 
@@ -423,7 +442,7 @@ func (rf *Raft) broadCastVote() {
 	rf.CurrentTerm++
 	rf.state = CANDIDATE
 	rf.VotedFor = rf.me
-	rf.voteCount++
+	rf.voteCount=1
 	localIdx := len(rf.Logs)-1
 	voteReq.CandidateID = rf.me
 	voteReq.LastLogIndex = rf.logIdxLocal2Global(localIdx)
@@ -440,7 +459,40 @@ func (rf *Raft) broadCastVote() {
 }
 
 func (rf *Raft) heartBeatDaemon(){
+	for {
+		rf.mu.Lock()
+		if rf.state != LEADER {
+			rf.mu.Unlock()
+			return
+		}
+		for i:=0; i<len(rf.peers); i++ {
+			if i!= rf.me {
+				go rf.checkConsistency(i)
+			}
+		}
+		rf.mu.Unlock()
+		time.Sleep(HEARTBEATINTERVAL)
+	}
+}
 
+func (rf *Raft) checkConsistency(to int) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if rf.state != LEADER {
+		return
+	}
+	prevIdx := rf.nextIndex[to]-1
+	localIdx := rf.logIdxGlobal2Local(prevIdx)
+	request := &AppendEntriesArgs{
+		Term : rf.CurrentTerm,
+		LeaderID: rf.me,
+		PrevLogIndex: prevIdx,
+		PrevLogTerm: rf.Logs[localIdx].Term,
+		Entries: nil,
+		LeaderCommit: rf.commitIndex,
+	}
+	request.Entries = append(request.Entries, rf.Logs[localIdx:]...)
+	go rf.sendAppendEntriesAndProcess(request, to)
 }
 
 func (rf *Raft) broadCastAppendLogs() {
