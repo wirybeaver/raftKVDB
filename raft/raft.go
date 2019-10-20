@@ -52,7 +52,7 @@ const (
 )
 
 const (
-	HEARTBEATINTERVAL    = 150
+	HEARTBEATINTERVAL    = 200
 	ELECTIONTIMEOUTFIXED = 400
 	// would scale out to 400, cf. the function randomizeTimeout
 	ELECTIONTIMEOUTRAND  = 200
@@ -368,22 +368,24 @@ func (rf *Raft) sendAppendEntriesAndProcess(args *AppendEntriesArgs, server int)
 		return
 	}
 	if reply.Success {
-		rf.matchIndex[server] = args.PrevLogIndex+len(args.Entries)
-		rf.nextIndex[server] = args.PrevLogIndex+len(args.Entries)+1
-		N := rf.matchIndex[server]
-		idx := rf.logIdxGlobal2Local(N)
-		count :=0
-		if N>rf.commitIndex && rf.Logs[idx].Term==rf.CurrentTerm {
-			for _, index := range rf.matchIndex {
-				if index>=N {
-					count++
+		N := args.PrevLogIndex+len(args.Entries)
+		if N>rf.matchIndex[server] {
+			rf.matchIndex[server] = N
+			rf.nextIndex[server] = N+1
+			idx := rf.logIdxGlobal2Local(N)
+			count := 0
+			if N>rf.commitIndex && rf.Logs[idx].Term==rf.CurrentTerm {
+				for _, index := range rf.matchIndex {
+					if index>=N {
+						count++
+					}
 				}
 			}
-		}
-		if count > len(rf.peers)/2 {
-			rf.commitIndex = N
-			DPrintf("sendAppend-CommitUpdate, reply=[%v]\n sender/leader=[%v], to=[%d]", reply.str(), rf.str(), server)
-			rf.commitCh <- struct{}{}
+			if count > len(rf.peers)/2 {
+				rf.commitIndex = N
+				DPrintf("sendAppend-CommitUpdate, reply=[%v]\n sender/leader=[%v], to=[%d]", reply.str(), rf.str(), server)
+				rf.commitCh <- struct{}{}
+			}
 		}
 	} else {
 		rf.nextIndex[server] = max(1, reply.ConflictIndex-1)
@@ -566,16 +568,16 @@ func (rf *Raft) checkConsistency(to int) {
 func (rf *Raft) applyLogEntryDaemon() {
 	for {
 		<- rf.commitCh
+		rf.mu.Lock()
 		for i, commitIdx := rf.lastApplied+1, rf.commitIndex; i<=commitIdx; i++ {
-			rf.mu.Lock()
 			idx := rf.logIdxGlobal2Local(i)
 			rf.applyCh <- ApplyMsg{
 				Command: rf.Logs[idx].Command,
 				Index: i,
 			}
 			rf.lastApplied=i
-			rf.mu.Unlock()
 		}
+		rf.mu.Unlock()
 	}
 }
 
