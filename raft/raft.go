@@ -21,6 +21,7 @@ import (
 	"math/rand"
 	"sync"
 	"time"
+	"fmt"
 )
 import "raftKVDB/labrpc"
 
@@ -82,7 +83,7 @@ type Raft struct {
 	state int         // follower, candidate or leader
 	voteCount int     // used for count votes
 	timer *time.Timer // election timer
-	seed  rand.Source
+	//seed  rand.Source
 
 	commitCh     chan struct{} // for commitIndex update
 	resetTimerCh chan struct{} // for reset election timer
@@ -163,6 +164,7 @@ type RequestVoteReply struct {
 // example RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
+	DPrintf("recvVote, req=[%v]\n recver=[%v] cand=[%d]", args.str(), rf.str(), args.CandidateID)
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -170,6 +172,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	reply.VoteGranted = false
 	if args.Term < rf.CurrentTerm {
 		reply.Term = rf.CurrentTerm
+		DPrintf("recvVote-staleRequest, reply=[%v]\n recver=[%v] cand=[%d]", reply.str(), rf.str(), args.CandidateID)
 		return
 	}
 
@@ -177,6 +180,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if args.Term > rf.CurrentTerm {
 		rf.CurrentTerm = args.Term
 		rf.goBackToFollower()
+		DPrintf("recvVote-GoBackFollower, reply=[%v]\n recver=[%v] cand=[%d]", reply.str(), rf.str(), args.CandidateID)
 	}
 
 	// Suspicious Point. I figure the second condition is necessary to avoid the loss of previous grant reply
@@ -188,6 +192,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			//rf.state = FOLLOWER
 			rf.VotedFor = args.CandidateID
 			reply.VoteGranted = true
+			DPrintf("recvVote-GrantVote, reply=[%v]\n recver=[%v] cand=[%d]", reply.str(), rf.str(), args.CandidateID)
 			rf.resetTimerCh <- struct{}{}
 		}
 	}
@@ -228,23 +233,26 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 }
 
 func (rf *Raft) sendRequestVoteAndProcess (args *RequestVoteArgs, sendTo int) {
+	DPrintf("sendVote, req=[%v]\n sender/cand=[%v], to=[%d]", args.str(), rf.str(), sendTo)
 	reply := &RequestVoteReply{}
 	ok := rf.sendRequestVote(sendTo, args, reply)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if !ok || rf.state!=CANDIDATE || reply.Term < rf.CurrentTerm {
+		DPrintf("sendVote-!okXXX, reply=[%v]\n sender/cand=[%v], to=[%d]", reply.str(), rf.str(), sendTo)
 		return
 	}
 	if reply.Term > rf.CurrentTerm {
 		rf.CurrentTerm = reply.Term
 		rf.goBackToFollower()
 		rf.resetTimerCh <- struct{}{}
+		DPrintf("sendVote-GoFollower, reply=[%v]\n sender/cand=[%v], to=[%d]", reply.str(), rf.str(), sendTo)
 		return
 	}
 
 	// it indicated ok == true && reply.CurrentTerm == rf.CurrentTerm && rf.state==CANDIDATE
-	rf.VotedFor++
-	if rf.VotedFor > len(rf.peers)/2 {
+	rf.voteCount++
+	if rf.voteCount > len(rf.peers)/2 {
 		rf.state = LEADER
 		for i:= range rf.nextIndex{
 			localIdx := len(rf.Logs)-1
@@ -253,8 +261,10 @@ func (rf *Raft) sendRequestVoteAndProcess (args *RequestVoteArgs, sendTo int) {
 		}
 		rf.matchIndex[rf.me] = rf.nextIndex[rf.me]-1
 		go rf.heartBeatDaemon()
+		DPrintf("sendVote-ToBeLeader, reply=[%v]\n sender/cand=[%v], to=[%d]", reply.str(), rf.str(), sendTo)
 		rf.resetTimerCh <- struct{}{}
 	}
+	DPrintf("sendVote-GetVote, reply=[%v]\n sender/cand=[%v], to=[%d]", reply.str(), rf.str(), sendTo)
 }
 
 type AppendEntriesArgs struct {
@@ -277,12 +287,14 @@ type AppendEntriesReply struct {
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	DPrintf("recvAppend, req=[%v]\n recver=[%v] leader=[%d]", args.str(), rf.str(), args.LeaderID)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
 	if args.Term < rf.CurrentTerm {
 		reply.Term = rf.CurrentTerm
 		reply.Success = false
+		DPrintf("recvAppend-StaleRequest, reply=[%v]\n recver=[%v], leader=[%d]", reply.str(), rf.str(), args.LeaderID)
 		return
 	}
 
@@ -304,6 +316,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		} else {
 			reply.ConflictIndex = args.PrevLogIndex
 		}
+		DPrintf("recvAppend-Conflict, reply=[%v]\n recver=[%v], leader=[%d]", reply.str(), rf.str(), args.LeaderID)
 		return
 	}
 
@@ -325,6 +338,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.commitIndex = min(args.LeaderCommit, rf.logIdxLocal2Global(len(rf.Logs)-1))
 		rf.commitCh <- struct{}{}
 	}
+	DPrintf("recvAppend-Success, reply=[%v]\n recver=[%v], leader=[%d]", reply.str(), rf.str(), args.LeaderID)
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
@@ -333,17 +347,20 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 }
 
 func (rf *Raft) sendAppendEntriesAndProcess(args *AppendEntriesArgs, server int) {
+	DPrintf("sendAppend, req=[%v]\n sender/leader=[%v], to=[%d]", args.str(), rf.str(), server)
 	reply := &AppendEntriesReply{}
 	ok := rf.sendAppendEntries(server, args, reply)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if !ok || rf.state!=LEADER || reply.Term < rf.CurrentTerm {
+		DPrintf("sendAppend-!okXXX, repley=[%v]\n sender/leader=[%v], to=[%d]", reply.str(), rf.str(), server)
 		return
 	}
 	if rf.CurrentTerm < reply.Term {
 		rf.CurrentTerm = reply.Term
 		rf.goBackToFollower()
 		rf.resetTimerCh <- struct{}{}
+		DPrintf("sendAppend-GoFollower, reply=[%v]\n sender/leader=[%v], to=[%d]", reply.str(), rf.str(), server)
 		return
 	}
 	if reply.Success {
@@ -361,10 +378,12 @@ func (rf *Raft) sendAppendEntriesAndProcess(args *AppendEntriesArgs, server int)
 		}
 		if count > len(rf.peers)/2 {
 			rf.commitIndex = N
+			DPrintf("sendAppend-CommitUpdate, reply=[%v]\n sender/leader=[%v], to=[%d]", reply.str(), rf.str(), server)
 			rf.commitCh <- struct{}{}
 		}
 	} else {
 		rf.nextIndex[server] = max(1, reply.ConflictIndex-1)
+		DPrintf("sendAppend-HasConflict, repley=[%v]\n sender/leader=[%v], to=[%d]", reply.str(), rf.str(), server)
 	}
 
 }
@@ -450,13 +469,14 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	rf.state = FOLLOWER
 	rf.timer = time.NewTimer(rf.randomizeTimeout())
-	rf.seed = rand.NewSource(int64(rf.me))
+	//rf.seed = rand.NewSource(int64(rf.me))
 	rf.resetTimerCh = make(chan struct{})
 	rf.commitCh = make(chan struct{}, 100)
 	rf.applyCh = applyCh
 
 	// initialize from state persisted before a crash
-	rf.readPersist(persister.ReadRaftState())
+	//rf.readPersist(persister.ReadRaftState())
+
 
 	go rf.electionDaemon()      // kick off election
 	go rf.applyLogEntryDaemon() // distinguished thread to apply log up through commitIdx
@@ -478,6 +498,7 @@ func (rf *Raft) electionDaemon() {
 }
 
 func (rf *Raft) broadCastVote() {
+	DPrintf("[%d] Became Candidate", rf.me)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	rf.CurrentTerm++
@@ -492,10 +513,9 @@ func (rf *Raft) broadCastVote() {
 		LastLogTerm: rf.Logs[localIdx].Term,
 		LastLogIndex: rf.logIdxLocal2Global(localIdx),
 	}
-	peerNum := len(rf.peers)
 
-	for i:=0; i<peerNum; i++ {
-		if rf.me != i {
+	for i:=0; i<len(rf.peers); i++ {
+		if rf.me == i {
 			continue
 		}
 		go rf.sendRequestVoteAndProcess(voteReq, i)
@@ -585,7 +605,7 @@ func (rf *Raft) resetTimer() {
 }
 
 func (rf *Raft) randomizeTimeout() time.Duration {
-	return time.Millisecond * time.Duration(ELECTIONTIMEOUTFIXED+rand.New(rf.seed).Intn(ELECTIONTIMEOUTRAND)*4)
+	return time.Millisecond * time.Duration(ELECTIONTIMEOUTFIXED+rand.Intn(ELECTIONTIMEOUTRAND)*4)
 }
 
 // util function, must be called within critical section
@@ -593,4 +613,27 @@ func (rf *Raft) randomizeTimeout() time.Duration {
 func (rf *Raft) goBackToFollower(){
 	rf.state = FOLLOWER
 	rf.VotedFor = -1
+}
+
+func (rf *Raft) str() string {
+	return fmt.Sprintf("me=%d, T=%d, VotedFor=%d, commitIdx=%d lastApplies=%d, state=%d, voteCnt=%d",
+		rf.me, rf.CurrentTerm, rf.VotedFor, rf.commitIndex,
+		rf.lastApplied, rf.state, rf.voteCount)
+}
+
+func (req *RequestVoteArgs) str() string {
+	return fmt.Sprintf("T=%d, Cand=%d, LastLogIdx=%d, LastLogTerm=%d", req.Term, req.CandidateID, req.LastLogIndex, req.LastLogTerm)
+}
+
+func (reply *RequestVoteReply) str() string {
+	return fmt.Sprintf("T=%d, VoteGrandted=%t", reply.Term, reply.VoteGranted)
+}
+
+func (req *AppendEntriesArgs) str() string {
+	return fmt.Sprintf("T=%d, LeaderID=%d, PrevLogIndex=%d, PrevLogTerm=%d, LeaderCommit=%d",
+		req.Term, req.LeaderID, req.PrevLogIndex, req.PrevLogTerm, req.LeaderCommit)
+}
+
+func (reply *AppendEntriesReply) str() string {
+	return fmt.Sprintf("T=%d, Success=%t, ConflictIdx=%d", reply.Term, reply.Success, reply.ConflictIndex)
 }
