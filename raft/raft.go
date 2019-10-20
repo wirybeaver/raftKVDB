@@ -155,7 +155,7 @@ type RequestVoteArgs struct {
 //
 type RequestVoteReply struct {
 	// Your data here (2A).
-	CurrentTerm int  // currentTerm, for candidate to update itself
+	Term int  // currentTerm, for candidate to update itself
 	VoteGranted bool // true means candidate received vote
 }
 
@@ -169,11 +169,11 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	reply.VoteGranted = false
 	if args.Term < rf.CurrentTerm {
-		reply.CurrentTerm = rf.CurrentTerm
+		reply.Term = rf.CurrentTerm
 		return
 	}
 
-	reply.CurrentTerm = args.Term
+	reply.Term = args.Term
 	if args.Term > rf.CurrentTerm {
 		rf.CurrentTerm = args.Term
 		rf.goBackToFollower()
@@ -232,10 +232,11 @@ func (rf *Raft) sendRequestVoteAndProcess (args *RequestVoteArgs, sendTo int) {
 	ok := rf.sendRequestVote(sendTo, args, reply)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	if !ok || rf.state!=CANDIDATE || reply.CurrentTerm < rf.CurrentTerm {
+	if !ok || rf.state!=CANDIDATE || reply.Term < rf.CurrentTerm {
 		return
 	}
-	if reply.CurrentTerm > rf.CurrentTerm {
+	if reply.Term > rf.CurrentTerm {
+		rf.CurrentTerm = reply.Term
 		rf.goBackToFollower()
 		rf.resetTimerCh <- struct{}{}
 		return
@@ -250,6 +251,7 @@ func (rf *Raft) sendRequestVoteAndProcess (args *RequestVoteArgs, sendTo int) {
 			rf.nextIndex[i] = rf.logIdxLocal2Global(localIdx)+1
 			rf.matchIndex[i] = 0
 		}
+		rf.matchIndex[rf.me] = rf.nextIndex[rf.me]-1
 		go rf.heartBeatDaemon()
 		rf.resetTimerCh <- struct{}{}
 	}
@@ -338,6 +340,33 @@ func (rf *Raft) sendAppendEntriesAndProcess(args *AppendEntriesArgs, server int)
 	if !ok || rf.state!=LEADER || reply.Term < rf.CurrentTerm {
 		return
 	}
+	if rf.CurrentTerm < reply.Term {
+		rf.CurrentTerm = reply.Term
+		rf.goBackToFollower()
+		rf.resetTimerCh <- struct{}{}
+		return
+	}
+	if reply.Success {
+		rf.matchIndex[server] = args.PrevLogIndex+len(args.Entries)
+		rf.nextIndex[server] = args.PrevLogIndex+len(args.Entries)+1
+		N := rf.matchIndex[server]
+		idx := rf.logIdxGlobal2Local(N)
+		count :=0
+		if N>rf.commitIndex && rf.Logs[idx].Term==rf.CurrentTerm {
+			for _, index := range rf.matchIndex {
+				if index>=N {
+					count++
+				}
+			}
+		}
+		if count > len(rf.peers)/2 {
+			rf.commitIndex = N
+			rf.commitCh <- struct{}{}
+		}
+	} else {
+		rf.nextIndex[server] = max(1, reply.ConflictIndex-1)
+	}
+
 }
 
 //
@@ -355,10 +384,21 @@ func (rf *Raft) sendAppendEntriesAndProcess(args *AppendEntriesArgs, server int)
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
-	term := -1
-	isLeader := true
+	term := 0
+	isLeader := false
 
 	// Your code here (2B).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if rf.state==LEADER {
+		log := LogEntry{rf.CurrentTerm, command}
+		rf.Logs = append(rf.Logs, log)
+		index = rf.logIdxLocal2Global(len(rf.Logs)-1)
+		term = rf.CurrentTerm
+		isLeader = true
+		rf.nextIndex[rf.me] = index+1
+		rf.matchIndex[rf.me] = index
+	}
 
 	return index, term, isLeader
 }
@@ -371,6 +411,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 //
 func (rf *Raft) Kill() {
 	// Your code here, if desired.
+	rf.timer.Stop()
+	rf.state=FOLLOWER
 }
 
 //
@@ -438,16 +480,18 @@ func (rf *Raft) electionDaemon() {
 func (rf *Raft) broadCastVote() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	voteReq := &RequestVoteArgs{}
 	rf.CurrentTerm++
 	rf.state = CANDIDATE
 	rf.VotedFor = rf.me
 	rf.voteCount=1
 	localIdx := len(rf.Logs)-1
-	voteReq.CandidateID = rf.me
-	voteReq.LastLogIndex = rf.logIdxLocal2Global(localIdx)
-	voteReq.LastLogTerm = rf.Logs[localIdx].Term
-	voteReq.Term = rf.CurrentTerm
+
+	voteReq := &RequestVoteArgs{
+		Term: rf.CurrentTerm,
+		CandidateID: rf.me,
+		LastLogTerm: rf.Logs[localIdx].Term,
+		LastLogIndex: rf.logIdxLocal2Global(localIdx),
+	}
 	peerNum := len(rf.peers)
 
 	for i:=0; i<peerNum; i++ {
@@ -491,21 +535,34 @@ func (rf *Raft) checkConsistency(to int) {
 		Entries: nil,
 		LeaderCommit: rf.commitIndex,
 	}
-	request.Entries = append(request.Entries, rf.Logs[localIdx:]...)
+	request.Entries = append(request.Entries, rf.Logs[localIdx+1:]...)
 	go rf.sendAppendEntriesAndProcess(request, to)
 }
 
-func (rf *Raft) broadCastAppendLogs() {
-
-}
-
 func (rf *Raft) applyLogEntryDaemon() {
-
+	for {
+		<- rf.commitCh
+		for i:= rf.lastApplied+1; i<=rf.commitIndex; i++ {
+			idx := rf.logIdxGlobal2Local(i)
+			rf.applyCh <- ApplyMsg{
+				Command: rf.Logs[idx].Command,
+				Index: i,
+			}
+		}
+	}
 }
 
 // helper function below
 func min(a int, b int) int {
 	if a < b {
+		return a
+	} else {
+		return b
+	}
+}
+
+func max(a int, b int) int {
+	if a > b {
 		return a
 	} else {
 		return b
