@@ -1,8 +1,7 @@
 # raftKVDB
 MIT 6.824
 
-Confusing Points:
-1. Step 3 in AppendEntries RPC in Figure 2. Why cannot we truncate log entries after the prevLogIndex when the entry indexed by the prevLogIndex matches?
+Tricky Points:
 
 Reference:
 1. [Student Guide issued by MIT TA](https://thesquareplanet.com/blog/students-guide-to-raft/)
@@ -10,19 +9,21 @@ Reference:
 3. [Course Schedule: Spring 2017](http://nil.csail.mit.edu/6.824/2017/schedule.html)
 4. [Slides from Princeton](https://www.cs.princeton.edu/courses/archive/fall16/cos418/index.html)
 
-Lab Results:
-[X] 2A
-`➜  raft git:(master) go test -run 2A
+Timeline
+- [x] 2A Leader Election
+```
+➜  raft git:(master) go test -run 2A
  Test (2A): initial election ...
  warning: term changed even though there were no failures  ... Passed
  Test (2A): election after network failure ...
    ... Passed
  PASS
  ok      raftKVDB/raft   7.023s
- `
+```
 
-[X] 2B
-`➜  raft git:(master) go test -run 2B
+- [x] 2B Log Replication
+```
+➜  raft git:(master) go test -run 2B
  Test (2B): basic agreement ...
    ... Passed
  Test (2B): agreement despite follower disconnection ...
@@ -39,4 +40,4 @@ Lab Results:
    ... Passed
  PASS
  ok      raftKVDB/raft   41.406s
-`
+```
