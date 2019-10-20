@@ -52,10 +52,10 @@ const (
 )
 
 const (
-	HEARTBEATINTERVAL    = 100
+	HEARTBEATINTERVAL    = 150
 	ELECTIONTIMEOUTFIXED = 400
 	// would scale out to 400, cf. the function randomizeTimeout
-	ELECTIONTIMEOUTRAND  = 100
+	ELECTIONTIMEOUTRAND  = 200
 )
 
 //
@@ -180,7 +180,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if args.Term > rf.CurrentTerm {
 		rf.CurrentTerm = args.Term
 		rf.goBackToFollower()
-		DPrintf("recvVote-GoBackFollower, reply=[%v]\n recver=[%v] cand=[%d]", reply.str(), rf.str(), args.CandidateID)
+		DPrintf("recvVote-GoBackFollower, recver=[%v] cand=[%d]", rf.str(), args.CandidateID)
 	}
 
 	// Suspicious Point. I figure the second condition is necessary to avoid the loss of previous grant reply
@@ -188,14 +188,15 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		idx := len(rf.Logs) - 1
 		localLastLogTerm := rf.Logs[idx].Term
 		localLastLogIndex := rf.logIdxLocal2Global(idx)
-		if args.LastLogTerm > localLastLogTerm || args.Term == localLastLogTerm && args.LastLogIndex >= localLastLogIndex {
+		if args.LastLogTerm > localLastLogTerm || args.LastLogTerm == localLastLogTerm && args.LastLogIndex >= localLastLogIndex {
 			//rf.state = FOLLOWER
 			rf.VotedFor = args.CandidateID
 			reply.VoteGranted = true
-			DPrintf("recvVote-GrantVote, reply=[%v]\n recver=[%v] cand=[%d]", reply.str(), rf.str(), args.CandidateID)
+			DPrintf("recvVote-GrantVote, recver=[%v] cand=[%d]", rf.str(), args.CandidateID)
 			rf.resetTimerCh <- struct{}{}
 		}
 	}
+	DPrintf("recvVote-End, reply=[%v]\n recver=[%v] cand=[%d]", reply.str(), rf.str(), args.CandidateID)
 }
 
 //
@@ -236,10 +237,11 @@ func (rf *Raft) sendRequestVoteAndProcess (args *RequestVoteArgs, sendTo int) {
 	DPrintf("sendVote, req=[%v]\n sender/cand=[%v], to=[%d]", args.str(), rf.str(), sendTo)
 	reply := &RequestVoteReply{}
 	ok := rf.sendRequestVote(sendTo, args, reply)
+	DPrintf("sendVote-feedback, reply=[%v]\n sender/cand=[%v], to=[%d]", reply.str(), rf.str(), sendTo)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if !ok || rf.state!=CANDIDATE || reply.Term < rf.CurrentTerm {
-		DPrintf("sendVote-!okXXX, reply=[%v]\n sender/cand=[%v], to=[%d]", reply.str(), rf.str(), sendTo)
+		DPrintf("sendVote-!okXXX, ok=[%t], reply=[%v]\n sender/cand=[%v], to=[%d]", ok, reply.str(), rf.str(), sendTo)
 		return
 	}
 	if reply.Term > rf.CurrentTerm {
@@ -251,20 +253,22 @@ func (rf *Raft) sendRequestVoteAndProcess (args *RequestVoteArgs, sendTo int) {
 	}
 
 	// it indicated ok == true && reply.CurrentTerm == rf.CurrentTerm && rf.state==CANDIDATE
-	rf.voteCount++
-	if rf.voteCount > len(rf.peers)/2 {
-		rf.state = LEADER
-		for i:= range rf.nextIndex{
-			localIdx := len(rf.Logs)-1
-			rf.nextIndex[i] = rf.logIdxLocal2Global(localIdx)+1
-			rf.matchIndex[i] = 0
+	if reply.VoteGranted {
+		DPrintf("sendVote-GetVote, reply=[%v]\n sender/cand=[%v], to=[%d]", reply.str(), rf.str(), sendTo)
+		rf.voteCount++
+		if rf.voteCount > len(rf.peers)/2 {
+			rf.state = LEADER
+			for i:= range rf.nextIndex{
+				localIdx := len(rf.Logs)-1
+				rf.nextIndex[i] = rf.logIdxLocal2Global(localIdx)+1
+				rf.matchIndex[i] = 0
+			}
+			rf.matchIndex[rf.me] = rf.nextIndex[rf.me]-1
+			go rf.heartBeatDaemon()
+			DPrintf("sendVote-ToBeLeader, reply=[%v]\n sender/cand=[%v], to=[%d]", reply.str(), rf.str(), sendTo)
+			rf.resetTimerCh <- struct{}{}
 		}
-		rf.matchIndex[rf.me] = rf.nextIndex[rf.me]-1
-		go rf.heartBeatDaemon()
-		DPrintf("sendVote-ToBeLeader, reply=[%v]\n sender/cand=[%v], to=[%d]", reply.str(), rf.str(), sendTo)
-		rf.resetTimerCh <- struct{}{}
 	}
-	DPrintf("sendVote-GetVote, reply=[%v]\n sender/cand=[%v], to=[%d]", reply.str(), rf.str(), sendTo)
 }
 
 type AppendEntriesArgs struct {
@@ -465,10 +469,13 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.lastApplied = 0
 	rf.commitIndex = 0
 	rf.nextIndex = make([]int, len(peers))
+	for i := range rf.nextIndex {
+		rf.nextIndex[i]=1
+	}
 	rf.matchIndex = make([]int, len(peers))
 
 	rf.state = FOLLOWER
-	rf.timer = time.NewTimer(rf.randomizeTimeout())
+	rf.timer = time.NewTimer(0)
 	//rf.seed = rand.NewSource(int64(rf.me))
 	rf.resetTimerCh = make(chan struct{})
 	rf.commitCh = make(chan struct{}, 100)
@@ -524,9 +531,7 @@ func (rf *Raft) broadCastVote() {
 
 func (rf *Raft) heartBeatDaemon(){
 	for {
-		rf.mu.Lock()
 		if rf.state != LEADER {
-			rf.mu.Unlock()
 			return
 		}
 		for i:=0; i<len(rf.peers); i++ {
@@ -534,8 +539,7 @@ func (rf *Raft) heartBeatDaemon(){
 				go rf.checkConsistency(i)
 			}
 		}
-		rf.mu.Unlock()
-		time.Sleep(HEARTBEATINTERVAL)
+		time.Sleep(HEARTBEATINTERVAL*time.Millisecond)
 	}
 }
 
@@ -562,12 +566,15 @@ func (rf *Raft) checkConsistency(to int) {
 func (rf *Raft) applyLogEntryDaemon() {
 	for {
 		<- rf.commitCh
-		for i:= rf.lastApplied+1; i<=rf.commitIndex; i++ {
+		for i, commitIdx := rf.lastApplied+1, rf.commitIndex; i<=commitIdx; i++ {
+			rf.mu.Lock()
 			idx := rf.logIdxGlobal2Local(i)
 			rf.applyCh <- ApplyMsg{
 				Command: rf.Logs[idx].Command,
 				Index: i,
 			}
+			rf.lastApplied=i
+			rf.mu.Unlock()
 		}
 	}
 }
@@ -598,14 +605,15 @@ func (rf *Raft) logIdxGlobal2Local(globalIdx int) int {
 }
 
 func (rf *Raft) resetTimer() {
-	if !rf.timer.Stop() {
-		<-rf.timer.C
-	}
+	//if !rf.timer.Stop() {
+	//	<-rf.timer.C
+	//}
+	rf.timer.Stop()
 	rf.timer.Reset(rf.randomizeTimeout())
 }
 
 func (rf *Raft) randomizeTimeout() time.Duration {
-	return time.Millisecond * time.Duration(ELECTIONTIMEOUTFIXED+rand.Intn(ELECTIONTIMEOUTRAND)*4)
+	return time.Millisecond * time.Duration(ELECTIONTIMEOUTFIXED+rand.Intn(ELECTIONTIMEOUTRAND))
 }
 
 // util function, must be called within critical section
@@ -616,9 +624,9 @@ func (rf *Raft) goBackToFollower(){
 }
 
 func (rf *Raft) str() string {
-	return fmt.Sprintf("me=%d, T=%d, VotedFor=%d, commitIdx=%d lastApplies=%d, state=%d, voteCnt=%d",
+	return fmt.Sprintf("me=%d, T=%d, VotedFor=%d, commitIdx=%d lastApplies=%d, state=%d, voteCnt=%d, logs=%v",
 		rf.me, rf.CurrentTerm, rf.VotedFor, rf.commitIndex,
-		rf.lastApplied, rf.state, rf.voteCount)
+		rf.lastApplied, rf.state, rf.voteCount, rf.Logs)
 }
 
 func (req *RequestVoteArgs) str() string {
