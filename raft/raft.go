@@ -52,7 +52,7 @@ const (
 )
 
 const (
-	HEARTBEATINTERVAL    = 200
+	HEARTBEATINTERVAL    = 150
 	ELECTIONTIMEOUTFIXED = 400
 	// would scale out to 400, cf. the function randomizeTimeout
 	ELECTIONTIMEOUTRAND  = 200
