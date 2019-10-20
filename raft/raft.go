@@ -18,10 +18,10 @@ package raft
 //
 
 import (
-	"fmt"
 	"math/rand"
 	"sync"
 	"time"
+	"fmt"
 )
 import "raftKVDB/labrpc"
 
@@ -42,10 +42,28 @@ import "raftKVDB/labrpc"
 // ApplyMsg, but set CommandValid to false for these other uses.
 //
 type ApplyMsg struct {
-	CommandValid bool
-	Command      interface{}
-	CommandIndex int
+	CommandIndex       int
+	Command     interface{}
+	CommandValid bool   // ignore for lab2; only used in lab3
 }
+
+type LogEntry struct {
+	Term    int
+	Command interface{}
+}
+
+const (
+	FOLLOWER = iota
+	CANDIDATE
+	LEADER
+)
+
+const (
+	HEARTBEATINTERVAL    = 150
+	ELECTIONTIMEOUTFIXED = 450
+	// would scale out to 400, cf. the function randomizeTimeout
+	ELECTIONTIMEOUTRAND  = 200
+)
 
 //
 // A Go object implementing a single Raft peer.
@@ -79,24 +97,6 @@ type Raft struct {
 	applyCh      chan ApplyMsg // channel to send ApplyMsg
 }
 
-type LogEntry struct {
-	Term    int
-	Command interface{}
-}
-
-const (
-	FOLLOWER = iota
-	CANDIDATE
-	LEADER
-)
-
-const (
-	HEARTBEATINTERVAL    = 150
-	ELECTIONTIMEOUTFIXED = 400
-	// would scale out to 400, cf. the function randomizeTimeout
-	ELECTIONTIMEOUTRAND  = 200
-)
-
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
@@ -114,7 +114,6 @@ func (rf *Raft) GetState() (int, bool) {
 	return term, isleader
 }
 
-
 //
 // save Raft's persistent state to stable storage,
 // where it can later be retrieved after a crash and restart.
@@ -124,38 +123,27 @@ func (rf *Raft) persist() {
 	// Your code here (2C).
 	// Example:
 	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
+	// e := gob.NewEncoder(w)
 	// e.Encode(rf.xxx)
 	// e.Encode(rf.yyy)
 	// data := w.Bytes()
 	// rf.persister.SaveRaftState(data)
 }
 
-
 //
 // restore previously persisted state.
 //
 func (rf *Raft) readPersist(data []byte) {
-	if data == nil || len(data) < 1 { // bootstrap without any state?
-		return
-	}
 	// Your code here (2C).
 	// Example:
 	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
+	// d := gob.NewDecoder(r)
+	// d.Decode(&rf.xxx)
+	// d.Decode(&rf.yyy)
+	if data == nil || len(data) < 1 { // bootstrap without any state?
+		return
+	}
 }
-
-
-
 
 //
 // example RequestVote RPC arguments structure.
@@ -183,7 +171,6 @@ type RequestVoteReply struct {
 // example RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	// Your code here (2A, 2B).
 	DPrintf("recvVote, req=[%v]\n recver=[%v] cand=[%d]", args.str(), rf.str(), args.CandidateID)
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
@@ -420,8 +407,7 @@ func (rf *Raft) sendAppendEntriesAndProcess(args *AppendEntriesArgs, server int)
 // server isn't the leader, returns false. otherwise start the
 // agreement and return immediately. there is no guarantee that this
 // command will ever be committed to the Raft log, since the leader
-// may fail or lose an election. even if the Raft instance has been killed,
-// this function should return gracefully.
+// may fail or lose an election.
 //
 // the first return value is the index that the command will appear at
 // if it's ever committed. the second return value is the current
@@ -481,8 +467,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// Your initialization code here (2A, 2B, 2C).
 
-	// initialize from state persisted before a crash
-	//rf.readPersist(persister.ReadRaftState())
 	rf.CurrentTerm = 0
 	rf.VotedFor = -1
 	// first log index is 1, thus we need a dummy log with index 0
@@ -505,6 +489,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.resetTimerCh = make(chan struct{})
 	rf.commitCh = make(chan struct{}, 100)
 	rf.applyCh = applyCh
+
+	// initialize from state persisted before a crash
+	//rf.readPersist(persister.ReadRaftState())
+
 
 	go rf.electionDaemon()      // kick off election
 	go rf.applyLogEntryDaemon() // distinguished thread to apply log up through commitIdx
@@ -643,7 +631,6 @@ func (rf *Raft) randomizeTimeout() time.Duration {
 func (rf *Raft) goBackToFollower(){
 	rf.state = FOLLOWER
 	rf.VotedFor = -1
-	rf.voteCount = 0
 }
 
 func (rf *Raft) str() string {
