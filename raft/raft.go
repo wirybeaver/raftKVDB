@@ -62,7 +62,6 @@ const (
 	CONFLICTINTERVAL     = 10
 	HEARTBEATINTERVAL    = 100
 	ELECTIONTIMEOUTFIXED = 400
-	// would scale out to 400, cf. the function randomizeTimeout
 	ELECTIONTIMEOUTRAND  = 400
 )
 
@@ -338,7 +337,15 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		if lastLogIndex < args.PrevLogIndex {
 			reply.ConflictIndex = lastLogIndex + 1
 		} else {
-			reply.ConflictIndex = args.PrevLogIndex
+			// find the head index whose term is the same as PrevLog's term
+			var i = rf.logIdxGlobal2Local(args.PrevLogIndex)
+			var t = rf.Logs[i].Term
+			for ; i>0; i-- {
+				if rf.Logs[i-1].Term != t {
+					break
+				}
+			}
+			reply.ConflictIndex = rf.logIdxLocal2Global(i)
 		}
 		DPrintf("[%d] recvAppend-Conflict from leader=[%d]\n rf=[%v]\n req=[%v]\n reply=[%v]", rf.me, args.LeaderID, rf.str(), args.str(), reply.str())
 		return

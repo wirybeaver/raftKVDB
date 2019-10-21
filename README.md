@@ -27,28 +27,28 @@ Test Result
 Test (2A): initial election ...
   ... Passed --   3.1  3   60    0
 Test (2A): election after network failure ...
-  ... Passed --   4.6  3  108    0
+  ... Passed --   4.5  3  111    0
 PASS
-ok      raftKVDB/raft   7.685s
+ok      raftKVDB/raft   7.602s
 ```
 
 - [x] 2B Log Replication
 ```
 ➜  raft git:(master) go test -run 2B
 Test (2B): basic agreement ...
-  ... Passed --   0.3  5   36    3
+  ... Passed --   0.3  5   47    3
 Test (2B): agreement despite follower disconnection ...
-  ... Passed --   5.6  3  118    8
+  ... Passed --   5.6  3  123    8
 Test (2B): no agreement if too many followers disconnect ...
   ... Passed --   3.6  5  187    3
 Test (2B): concurrent Start()s ...
-  ... Passed --   1.0  3   28    6
+  ... Passed --   0.6  3   20    6
 Test (2B): rejoin of partitioned leader ...
   ... Passed --   6.3  3  189    4
 Test (2B): leader backs up quickly over incorrect follower logs ...
-  ... Passed --  17.1  5 2233  102
+  ... Passed --  17.1  5 2104  102
 Test (2B): RPC counts aren't too high ...
-  ... Passed --   2.0  3   60   12
+  ... Passed --   2.4  3   67   12
 PASS
-ok      raftKVDB/raft   35.936s
+ok      raftKVDB/raft   36.049s
 ```
