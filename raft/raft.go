@@ -59,7 +59,7 @@ const (
 )
 
 const (
-	CONFLICTINTERVAL     = 20
+	CONFLICTINTERVAL     = 10
 	HEARTBEATINTERVAL    = 100
 	ELECTIONTIMEOUTFIXED = 400
 	// would scale out to 400, cf. the function randomizeTimeout
@@ -91,7 +91,7 @@ type Raft struct {
 	state int         // follower, candidate or leader
 	voteCount int     // used for count votes
 	timer *time.Timer // election timer
-	//seed  rand.Source
+	seed  rand.Source
 
 	commitCh     chan struct{} // for commitIndex update
 	resetTimerCh chan struct{} // for reset election timer
@@ -456,6 +456,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		isLeader = true
 		rf.nextIndex[rf.me] = index+1
 		rf.matchIndex[rf.me] = index
+		go rf.fastBroadCastNewCommand()
 	}
 
 	return index, term, isLeader
@@ -509,16 +510,15 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	}
 	rf.matchIndex = make([]int, len(peers))
 
+	rf.seed = rand.NewSource(int64(rf.me))
 	rf.state = FOLLOWER
 	rf.timer = time.NewTimer(0)
-	//rf.seed = rand.NewSource(int64(rf.me))
 	rf.resetTimerCh = make(chan struct{})
 	rf.commitCh = make(chan struct{}, 100)
 	rf.applyCh = applyCh
 
 	// initialize from state persisted before a crash
 	//rf.readPersist(persister.ReadRaftState())
-
 
 	go rf.electionDaemon()      // kick off election
 	go rf.applyLogEntryDaemon() // distinguished thread to apply log up through commitIdx
@@ -586,6 +586,14 @@ func (rf *Raft) backupOverIncorrectFollowerLogs(peer int) {
 	rf.checkConsistency(peer)
 }
 
+func (rf *Raft) fastBroadCastNewCommand(){
+	for i := range rf.peers {
+		if i!=rf.me {
+			rf.checkConsistency(i)
+		}
+	}
+}
+
 func (rf *Raft) checkConsistency(to int) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -610,15 +618,18 @@ func (rf *Raft) applyLogEntryDaemon() {
 	for {
 		<- rf.commitCh
 		rf.mu.Lock()
-		for i, commitIdx := rf.lastApplied+1, rf.commitIndex; i<=commitIdx; i++ {
+		start, end := rf.lastApplied+1, rf.commitIndex
+		//rf.mu.Unlock()
+		for i := start; i<=end; i++ {
 			idx := rf.logIdxGlobal2Local(i)
 			rf.applyCh <- ApplyMsg{
 				Command: rf.Logs[idx].Command,
 				CommandIndex: i,
 				CommandValid: true,
 			}
-			rf.lastApplied=i
 		}
+		//rf.mu.Lock()
+		rf.lastApplied=end
 		rf.mu.Unlock()
 	}
 }
@@ -656,7 +667,7 @@ func (rf *Raft) resetTimer() {
 }
 
 func (rf *Raft) randomizeTimeout() time.Duration {
-	return time.Millisecond * time.Duration(ELECTIONTIMEOUTFIXED+rand.Intn(ELECTIONTIMEOUTRAND))
+	return time.Millisecond * time.Duration(ELECTIONTIMEOUTFIXED+rand.New(rf.seed).Intn(ELECTIONTIMEOUTRAND))
 }
 
 // util function, must be called within critical section
