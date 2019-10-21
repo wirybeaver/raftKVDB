@@ -3,13 +3,11 @@ MIT 6.824
 
 Optimization TODO:
 - Find the median of matchIndex using Quick Selection, whose running time is linear
-- Create a new Goroutine to backup incorrect follower logs more quickly
 - Replace commitChannel with a Conditional Variable
 
 Tricky Bug not mentioned in the paper and MIT's handout
 - When election timeout elapses, check the current state before canvassing votes. If the node is leader, do nothing.
 - When handle the reply of AppendEntriesRPC, check whether prevLogIdx+len(Entries) \> matchIndex[peer]. If not, trying to update leaderCommitIdx wastes time.
-
 
 Reference:
 1. [Student Guide issued by MIT TA](https://thesquareplanet.com/blog/students-guide-to-raft/)
