@@ -59,10 +59,10 @@ const (
 )
 
 const (
-	HEARTBEATINTERVAL    = 150
-	ELECTIONTIMEOUTFIXED = 450
+	HEARTBEATINTERVAL    = 100
+	ELECTIONTIMEOUTFIXED = 400
 	// would scale out to 400, cf. the function randomizeTimeout
-	ELECTIONTIMEOUTRAND  = 200
+	ELECTIONTIMEOUTRAND  = 400
 )
 
 //
@@ -171,7 +171,7 @@ type RequestVoteReply struct {
 // example RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	DPrintf("recvVote, req=[%v]\n recver=[%v] cand=[%d]", args.str(), rf.str(), args.CandidateID)
+	DPrintf("[%d] recvVote-Start from candidate=[%d]\n req=[%v]\n rf=[%v]", rf.me, args.CandidateID, args.str(), rf.str())
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -179,7 +179,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	reply.VoteGranted = false
 	if args.Term < rf.CurrentTerm {
 		reply.Term = rf.CurrentTerm
-		DPrintf("recvVote-staleRequest, reply=[%v]\n recver=[%v] cand=[%d]", reply.str(), rf.str(), args.CandidateID)
+		DPrintf("[%d] recvVote-StaleRequest from candidate=[%d]\n req=[%v]\n reply=[]%v\n rf=[%v]", rf.me, args.CandidateID, args.str(), reply.str(), rf.str())
 		return
 	}
 
@@ -187,7 +187,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if args.Term > rf.CurrentTerm {
 		rf.CurrentTerm = args.Term
 		rf.goBackToFollower()
-		DPrintf("recvVote-GoBackFollower, recver=[%v] cand=[%d]", rf.str(), args.CandidateID)
 	}
 
 	// Suspicious Point. I figure the second condition is necessary to avoid the loss of previous grant reply
@@ -199,11 +198,14 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			//rf.state = FOLLOWER
 			rf.VotedFor = args.CandidateID
 			reply.VoteGranted = true
-			DPrintf("recvVote-GrantVote, recver=[%v] cand=[%d]", rf.str(), args.CandidateID)
+			DPrintf("[%d] recvVote-GrantVote from candidate=[%d]\n req=[%v]\n reply=[]%v\n rf=[%v]", rf.me, args.CandidateID, args.str(), reply.str(), rf.str())
 			rf.resetTimerCh <- struct{}{}
+		} else {
+			DPrintf("[%d] recvVote-NoVote-UpToDate from candidate=[%d]\n req=[%v]\n reply=[]%v\n rf=[%v]", rf.me, args.CandidateID, args.str(), reply.str(), rf.str())
 		}
+	} else{
+		DPrintf("[%d] recvVote-NoVote-1 from candidate=[%d]\n req=[%v]\n reply=[]%v\n rf=[%v]", rf.me, args.CandidateID, args.str(), reply.str(), rf.str())
 	}
-	DPrintf("recvVote-End, reply=[%v]\n recver=[%v] cand=[%d]", reply.str(), rf.str(), args.CandidateID)
 }
 
 //
@@ -241,30 +243,32 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 }
 
 func (rf *Raft) sendRequestVoteAndProcess (args *RequestVoteArgs, sendTo int) {
-	DPrintf("sendVote, req=[%v]\n sender/cand=[%v], to=[%d]", args.str(), rf.str(), sendTo)
+	DPrintf("Cand [%d] sendVote to peer=[%d]\n req=[%v]\n rf=[%v]", rf.me, sendTo, args.str(), rf.str())
 	reply := &RequestVoteReply{}
 	ok := rf.sendRequestVote(sendTo, args, reply)
-	DPrintf("sendVote-feedback, reply=[%v]\n sender/cand=[%v], to=[%d]", reply.str(), rf.str(), sendTo)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if !ok || rf.state!=CANDIDATE || reply.Term < rf.CurrentTerm {
-		DPrintf("sendVote-!okXXX, ok=[%t], reply=[%v]\n sender/cand=[%v], to=[%d]", ok, reply.str(), rf.str(), sendTo)
+		DPrintf("Cand [%d] sendVote-Drop to peer=[%d] ok=[%t]\n req=[%v]\n reply=[%v]\n rf=[%v]", rf.me, sendTo, ok, args.str(), reply.str(), rf.str())
 		return
 	}
 	if reply.Term > rf.CurrentTerm {
 		rf.CurrentTerm = reply.Term
 		rf.goBackToFollower()
 		rf.resetTimerCh <- struct{}{}
-		DPrintf("sendVote-GoFollower, reply=[%v]\n sender/cand=[%v], to=[%d]", reply.str(), rf.str(), sendTo)
+		DPrintf("Cand [%d] sendVote-FOLLOW to peer=[%d]\n req=[%v]\n reply=[%v]\n rf=[%v]", rf.me, sendTo, args.str(), reply.str(), rf.str())
 		return
 	}
 
 	// it indicated ok == true && reply.CurrentTerm == rf.CurrentTerm && rf.state==CANDIDATE
 	if reply.VoteGranted {
-		DPrintf("sendVote-GetVote, reply=[%v]\n sender/cand=[%v], to=[%d]", reply.str(), rf.str(), sendTo)
+		DPrintf("[%d] sendVote-GetVote to peer=[%d]", rf.me, sendTo)
 		rf.voteCount++
 		if rf.voteCount > len(rf.peers)/2 {
+			// leader initialization
 			rf.state = LEADER
+			rf.voteCount = 0
+			rf.VotedFor = -1
 			for i:= range rf.nextIndex{
 				localIdx := len(rf.Logs)-1
 				rf.nextIndex[i] = rf.logIdxLocal2Global(localIdx)+1
@@ -272,9 +276,13 @@ func (rf *Raft) sendRequestVoteAndProcess (args *RequestVoteArgs, sendTo int) {
 			}
 			rf.matchIndex[rf.me] = rf.nextIndex[rf.me]-1
 			go rf.heartBeatDaemon()
-			DPrintf("sendVote-ToBeLeader, reply=[%v]\n sender/cand=[%v], to=[%d]", reply.str(), rf.str(), sendTo)
+			DPrintf("[%d] sendVote-ToLeader to peer=[%d]\n req=[%v]\n reply=[%v]\n rf=[%v]", rf.me, sendTo, args.str(), reply.str(), rf.str())
 			rf.resetTimerCh <- struct{}{}
+		} else {
+			DPrintf("[%d] sendVote-NotMajority to peer=[%d]\n req=[%v]\n reply=[%v]\n rf=[%v]", rf.me, sendTo, args.str(), reply.str(), rf.str())
 		}
+	} else{
+		DPrintf("[%d] sendVote-FOLLOW to peer=[%d]\n req=[%v]\n reply=[%v]\n rf=[%v]", rf.me, sendTo, args.str(), reply.str(), rf.str())
 	}
 }
 
@@ -298,14 +306,14 @@ type AppendEntriesReply struct {
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
-	DPrintf("recvAppend, req=[%v]\n recver=[%v] leader=[%d]", args.str(), rf.str(), args.LeaderID)
+	DPrintf("[%d] recvAppend-Start from leader=[%d]\n rf=[%v]\n req=[%v]\n", rf.me, args.LeaderID, rf.str(), args.str())
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
 	if args.Term < rf.CurrentTerm {
 		reply.Term = rf.CurrentTerm
 		reply.Success = false
-		DPrintf("recvAppend-StaleRequest, reply=[%v]\n recver=[%v], leader=[%d]", reply.str(), rf.str(), args.LeaderID)
+		DPrintf("[%d] recvAppend-StaleRequest from leader=[%d]\n rf=[%v]\n req=[%v]\n reply=[%v]", rf.me, args.LeaderID, rf.str(), args.str(), reply.str())
 		return
 	}
 
@@ -327,7 +335,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		} else {
 			reply.ConflictIndex = args.PrevLogIndex
 		}
-		DPrintf("recvAppend-Conflict, reply=[%v]\n recver=[%v], leader=[%d]", reply.str(), rf.str(), args.LeaderID)
+		DPrintf("[%d] recvAppend-Conflict from leader=[%d]\n rf=[%v]\n req=[%v]\n reply=[%v]", rf.me, args.LeaderID, rf.str(), args.str(), reply.str())
 		return
 	}
 
@@ -346,10 +354,15 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	if args.LeaderCommit > rf.commitIndex {
 		// Suspicious Point, last of new entries?.
+		if rf.commitIndex == rf.logIdxLocal2Global(len(rf.Logs)-1) {
+			DPrintf("Internal Error when reply to AppendRPC")
+		}
 		rf.commitIndex = min(args.LeaderCommit, rf.logIdxLocal2Global(len(rf.Logs)-1))
+		DPrintf("[%d] recvAppend-Success-CommitUpdate from leader=[%d]\n rf=[%v]\n req=[%v]\n reply=[%v]", rf.me, args.LeaderID, rf.str(), args.str(), reply.str())
 		rf.commitCh <- struct{}{}
+	} else {
+		DPrintf("[%d] recvAppend-Success-NoCommitUpdate from leader=[%d]\n rf=[%v]\n req=[%v]\n reply=[%v]", rf.me, args.LeaderID, rf.str(), args.str(), reply.str())
 	}
-	DPrintf("recvAppend-Success, reply=[%v]\n recver=[%v], leader=[%d]", reply.str(), rf.str(), args.LeaderID)
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
@@ -358,20 +371,20 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 }
 
 func (rf *Raft) sendAppendEntriesAndProcess(args *AppendEntriesArgs, server int) {
-	DPrintf("sendAppend, req=[%v]\n sender/leader=[%v], to=[%d]", args.str(), rf.str(), server)
+	DPrintf("leader[%d] sendAppend-Start to peer[%d]\n req=[%v]\n rf=[%v]", rf.me, server, args.str(), rf.str())
 	reply := &AppendEntriesReply{}
 	ok := rf.sendAppendEntries(server, args, reply)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if !ok || rf.state!=LEADER || reply.Term < rf.CurrentTerm {
-		DPrintf("sendAppend-!okXXX, repley=[%v]\n sender/leader=[%v], to=[%d]", reply.str(), rf.str(), server)
+		DPrintf("leader[%d] sendAppend-Drop to peer[%d] ok=[%t]\n req=[%v]\n reply=[%v]\n rf=[%v]", rf.me, server, ok, args.str(), reply.str(), rf.str())
 		return
 	}
 	if rf.CurrentTerm < reply.Term {
 		rf.CurrentTerm = reply.Term
 		rf.goBackToFollower()
 		rf.resetTimerCh <- struct{}{}
-		DPrintf("sendAppend-GoFollower, reply=[%v]\n sender/leader=[%v], to=[%d]", reply.str(), rf.str(), server)
+		DPrintf("leader[%d] sendAppend-Follow to peer[%d]\n req=[%v]\n reply=[%v]\n rf=[%v]", rf.me, server, args.str(), reply.str(), rf.str())
 		return
 	}
 	if reply.Success {
@@ -390,13 +403,17 @@ func (rf *Raft) sendAppendEntriesAndProcess(args *AppendEntriesArgs, server int)
 			}
 			if count > len(rf.peers)/2 {
 				rf.commitIndex = N
-				DPrintf("sendAppend-CommitUpdate, reply=[%v]\n sender/leader=[%v], to=[%d]", reply.str(), rf.str(), server)
+				DPrintf("leader[%d] sendAppend-Success-Majority to peer[%d]\n req=[%v]\n reply=[%v]\n rf=[%v]", rf.me, server, args.str(), reply.str(), rf.str())
 				rf.commitCh <- struct{}{}
+			} else {
+				DPrintf("leader[%d] sendAppend-Success-NotMajority to peer[%d]\n req=[%v]\n reply=[%v]\n rf=[%v]", rf.me, server, args.str(), reply.str(), rf.str())
 			}
+		} else{
+			DPrintf("leader[%d] sendAppend-Success-StaleReplyOrHeartReply to peer[%d]\n req=[%v]\n reply=[%v]\n rf=[%v]", rf.me, server, args.str(), reply.str(), rf.str())
 		}
 	} else {
-		rf.nextIndex[server] = max(1, reply.ConflictIndex-1)
-		DPrintf("sendAppend-HasConflict, repley=[%v]\n sender/leader=[%v], to=[%d]", reply.str(), rf.str(), server)
+		rf.nextIndex[server] = max(1, reply.ConflictIndex)
+		DPrintf("leader[%d] sendAppend-HasConflict to peer[%d]\n req=[%v]\n reply=[%v]\n rf=[%v]", rf.me, server, args.str(), reply.str(), rf.str())
 	}
 
 }
@@ -416,7 +433,7 @@ func (rf *Raft) sendAppendEntriesAndProcess(args *AppendEntriesArgs, server int)
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
-	term := 0
+	term := -1
 	isLeader := false
 
 	// Your code here (2B).
@@ -517,6 +534,9 @@ func (rf *Raft) broadCastVote() {
 	DPrintf("[%d] Became Candidate", rf.me)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	if rf.state == LEADER {
+		return
+	}
 	rf.CurrentTerm++
 	rf.state = CANDIDATE
 	rf.VotedFor = rf.me
@@ -615,10 +635,9 @@ func (rf *Raft) logIdxGlobal2Local(globalIdx int) int {
 }
 
 func (rf *Raft) resetTimer() {
-	//if !rf.timer.Stop() {
-	//	<-rf.timer.C
-	//}
-	rf.timer.Stop()
+	if !rf.timer.Stop() {
+		<-rf.timer.C
+	}
 	rf.timer.Reset(rf.randomizeTimeout())
 }
 
@@ -631,16 +650,22 @@ func (rf *Raft) randomizeTimeout() time.Duration {
 func (rf *Raft) goBackToFollower(){
 	rf.state = FOLLOWER
 	rf.VotedFor = -1
+	rf.voteCount = 0
 }
 
 func (rf *Raft) str() string {
-	return fmt.Sprintf("me=%d, T=%d, VotedFor=%d, commitIdx=%d lastApplies=%d, state=%d, voteCnt=%d, logs=%v",
+	str1 := fmt.Sprintf("me=%d, T=%d, VotedFor=%d, commitIdx=%d lastApplies=%d, state=%d, voteCnt=%d\n logs=%v\n",
 		rf.me, rf.CurrentTerm, rf.VotedFor, rf.commitIndex,
 		rf.lastApplied, rf.state, rf.voteCount, rf.Logs)
+	if rf.state==LEADER {
+		return str1+fmt.Sprintf(" nextIdxs=[%v]\n matchIdxs=[%v]\n", rf.nextIndex, rf.matchIndex)
+	} else {
+		return str1
+	}
 }
 
 func (req *RequestVoteArgs) str() string {
-	return fmt.Sprintf("T=%d, Cand=%d, LastLogIdx=%d, LastLogTerm=%d", req.Term, req.CandidateID, req.LastLogIndex, req.LastLogTerm)
+	return fmt.Sprintf("T=%d, CandID=%d, LastLogIdx=%d, LastLogTerm=%d", req.Term, req.CandidateID, req.LastLogIndex, req.LastLogTerm)
 }
 
 func (reply *RequestVoteReply) str() string {
@@ -648,8 +673,8 @@ func (reply *RequestVoteReply) str() string {
 }
 
 func (req *AppendEntriesArgs) str() string {
-	return fmt.Sprintf("T=%d, LeaderID=%d, PrevLogIndex=%d, PrevLogTerm=%d, LeaderCommit=%d",
-		req.Term, req.LeaderID, req.PrevLogIndex, req.PrevLogTerm, req.LeaderCommit)
+	return fmt.Sprintf("T=%d, LeaderID=%d, PrevLogIndex=%d, PrevLogTerm=%d, LeaderCommit=%d\n entries=[%v]",
+		req.Term, req.LeaderID, req.PrevLogIndex, req.PrevLogTerm, req.LeaderCommit, req.Entries)
 }
 
 func (reply *AppendEntriesReply) str() string {
