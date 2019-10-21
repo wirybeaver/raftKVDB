@@ -59,6 +59,7 @@ const (
 )
 
 const (
+	CONFLICTINTERVAL     = 20
 	HEARTBEATINTERVAL    = 100
 	ELECTIONTIMEOUTFIXED = 400
 	// would scale out to 400, cf. the function randomizeTimeout
@@ -200,12 +201,14 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			reply.VoteGranted = true
 			DPrintf("[%d] recvVote-GrantVote from candidate=[%d]\n req=[%v]\n reply=[]%v\n rf=[%v]", rf.me, args.CandidateID, args.str(), reply.str(), rf.str())
 			rf.resetTimerCh <- struct{}{}
-		} else {
-			DPrintf("[%d] recvVote-NoVote-UpToDate from candidate=[%d]\n req=[%v]\n reply=[]%v\n rf=[%v]", rf.me, args.CandidateID, args.str(), reply.str(), rf.str())
 		}
-	} else{
-		DPrintf("[%d] recvVote-NoVote-1 from candidate=[%d]\n req=[%v]\n reply=[]%v\n rf=[%v]", rf.me, args.CandidateID, args.str(), reply.str(), rf.str())
+		//else {
+		//	DPrintf("[%d] recvVote-NoVote-UpToDate from candidate=[%d]\n req=[%v]\n reply=[]%v\n rf=[%v]", rf.me, args.CandidateID, args.str(), reply.str(), rf.str())
+		//}
 	}
+	//else{
+	//	DPrintf("[%d] recvVote-NoVote-1 from candidate=[%d]\n req=[%v]\n reply=[]%v\n rf=[%v]", rf.me, args.CandidateID, args.str(), reply.str(), rf.str())
+	//}
 }
 
 //
@@ -278,12 +281,14 @@ func (rf *Raft) sendRequestVoteAndProcess (args *RequestVoteArgs, sendTo int) {
 			go rf.heartBeatDaemon()
 			DPrintf("[%d] sendVote-ToLeader to peer=[%d]\n req=[%v]\n reply=[%v]\n rf=[%v]", rf.me, sendTo, args.str(), reply.str(), rf.str())
 			rf.resetTimerCh <- struct{}{}
-		} else {
-			DPrintf("[%d] sendVote-NotMajority to peer=[%d]\n req=[%v]\n reply=[%v]\n rf=[%v]", rf.me, sendTo, args.str(), reply.str(), rf.str())
 		}
-	} else{
-		DPrintf("[%d] sendVote-FOLLOW to peer=[%d]\n req=[%v]\n reply=[%v]\n rf=[%v]", rf.me, sendTo, args.str(), reply.str(), rf.str())
+		//else {
+		//	DPrintf("[%d] sendVote-NotMajority to peer=[%d]\n req=[%v]\n reply=[%v]\n rf=[%v]", rf.me, sendTo, args.str(), reply.str(), rf.str())
+		//}
 	}
+	//else{
+	//	DPrintf("[%d] sendVote-FOLLOW to peer=[%d]\n req=[%v]\n reply=[%v]\n rf=[%v]", rf.me, sendTo, args.str(), reply.str(), rf.str())
+	//}
 }
 
 type AppendEntriesArgs struct {
@@ -360,9 +365,10 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.commitIndex = min(args.LeaderCommit, rf.logIdxLocal2Global(len(rf.Logs)-1))
 		DPrintf("[%d] recvAppend-Success-CommitUpdate from leader=[%d]\n rf=[%v]\n req=[%v]\n reply=[%v]", rf.me, args.LeaderID, rf.str(), args.str(), reply.str())
 		rf.commitCh <- struct{}{}
-	} else {
-		DPrintf("[%d] recvAppend-Success-NoCommitUpdate from leader=[%d]\n rf=[%v]\n req=[%v]\n reply=[%v]", rf.me, args.LeaderID, rf.str(), args.str(), reply.str())
 	}
+	//else {
+	//	DPrintf("[%d] recvAppend-Success-NoCommitUpdate from leader=[%d]\n rf=[%v]\n req=[%v]\n reply=[%v]", rf.me, args.LeaderID, rf.str(), args.str(), reply.str())
+	//}
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
@@ -405,14 +411,17 @@ func (rf *Raft) sendAppendEntriesAndProcess(args *AppendEntriesArgs, server int)
 				rf.commitIndex = N
 				DPrintf("leader[%d] sendAppend-Success-Majority to peer[%d]\n req=[%v]\n reply=[%v]\n rf=[%v]", rf.me, server, args.str(), reply.str(), rf.str())
 				rf.commitCh <- struct{}{}
-			} else {
-				DPrintf("leader[%d] sendAppend-Success-NotMajority to peer[%d]\n req=[%v]\n reply=[%v]\n rf=[%v]", rf.me, server, args.str(), reply.str(), rf.str())
 			}
-		} else{
-			DPrintf("leader[%d] sendAppend-Success-StaleReplyOrHeartReply to peer[%d]\n req=[%v]\n reply=[%v]\n rf=[%v]", rf.me, server, args.str(), reply.str(), rf.str())
+			//else {
+			//	DPrintf("leader[%d] sendAppend-Success-NotMajority to peer[%d]\n req=[%v]\n reply=[%v]\n rf=[%v]", rf.me, server, args.str(), reply.str(), rf.str())
+			//}
 		}
+		//else{
+		//	DPrintf("leader[%d] sendAppend-Success-StaleReplyOrHeartReply to peer[%d]\n req=[%v]\n reply=[%v]\n rf=[%v]", rf.me, server, args.str(), reply.str(), rf.str())
+		//}
 	} else {
 		rf.nextIndex[server] = max(1, reply.ConflictIndex)
+		go rf.backupOverIncorrectFollowerLogs(server)
 		DPrintf("leader[%d] sendAppend-HasConflict to peer[%d]\n req=[%v]\n reply=[%v]\n rf=[%v]", rf.me, server, args.str(), reply.str(), rf.str())
 	}
 
@@ -570,6 +579,11 @@ func (rf *Raft) heartBeatDaemon(){
 		}
 		time.Sleep(HEARTBEATINTERVAL*time.Millisecond)
 	}
+}
+
+func (rf *Raft) backupOverIncorrectFollowerLogs(peer int) {
+	time.Sleep(time.Millisecond*CONFLICTINTERVAL)
+	rf.checkConsistency(peer)
 }
 
 func (rf *Raft) checkConsistency(to int) {
