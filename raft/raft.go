@@ -18,6 +18,8 @@ package raft
 //
 
 import (
+	"bytes"
+	"encoding/gob"
 	"math/rand"
 	"sync"
 	"time"
@@ -122,12 +124,14 @@ func (rf *Raft) GetState() (int, bool) {
 func (rf *Raft) persist() {
 	// Your code here (2C).
 	// Example:
-	// w := new(bytes.Buffer)
-	// e := gob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// data := w.Bytes()
-	// rf.persister.SaveRaftState(data)
+	w := new(bytes.Buffer)
+	e := gob.NewEncoder(w)
+	if e.Encode(rf.CurrentTerm)!=nil || e.Encode(rf.CurrentTerm)!=nil || e.Encode(rf.Logs)!=nil {
+		DPrintf("Error: server  %d fail to write Persisted state", rf.me)
+	} else {
+		data := w.Bytes()
+		rf.persister.SaveRaftState(data)
+	}
 }
 
 //
@@ -136,12 +140,20 @@ func (rf *Raft) persist() {
 func (rf *Raft) readPersist(data []byte) {
 	// Your code here (2C).
 	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := gob.NewDecoder(r)
-	// d.Decode(&rf.xxx)
-	// d.Decode(&rf.yyy)
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		return
+	}
+	r := bytes.NewBuffer(data)
+	d := gob.NewDecoder(r)
+	var currentTerm int
+	var votedFor int
+	var logs []LogEntry
+	if d.Decode(&currentTerm)!=nil ||d.Decode(&votedFor)!=nil || d.Decode(&logs)!=nil{
+		DPrintf("Error: server %d fail to read Persisted state", rf.me)
+	} else {
+		rf.CurrentTerm = currentTerm
+		rf.VotedFor = votedFor
+		rf.Logs = logs
 	}
 }
 
@@ -331,14 +343,15 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.goBackToFollower()
 	rf.resetTimerCh <- struct{}{}
 
-	lastLogIndex := rf.logIdxLocal2Global(len(rf.Logs) - 1)
-	if args.PrevLogIndex > lastLogIndex || rf.Logs[args.PrevLogIndex].Term != args.PrevLogTerm {
+	localLastIdx := len(rf.Logs) - 1
+	localPrevIdx := rf.logIdxGlobal2Local(args.PrevLogIndex)
+	if localPrevIdx > localLastIdx || rf.Logs[localPrevIdx].Term != args.PrevLogTerm {
 		reply.Success = false
-		if lastLogIndex < args.PrevLogIndex {
-			reply.ConflictIndex = lastLogIndex + 1
+		if localLastIdx < localPrevIdx {
+			reply.ConflictIndex = rf.logIdxLocal2Global(localLastIdx) + 1
 		} else {
 			// find the head index whose term is the same as PrevLog's term
-			var i = rf.logIdxGlobal2Local(args.PrevLogIndex)
+			var i = localPrevIdx
 			var t = rf.Logs[i].Term
 			for ; i>0; i-- {
 				if rf.Logs[i-1].Term != t {
@@ -352,7 +365,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	reply.Success = true
-	i := rf.logIdxGlobal2Local(args.PrevLogIndex + 1)
+	i := localPrevIdx+1
 	j := 0
 	for ; i < len(rf.Logs) && j < len(args.Entries); i, j = i+1, j+1 {
 		if rf.Logs[i].Term != args.Entries[j].Term {
