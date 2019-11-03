@@ -1,6 +1,6 @@
 package raftkv
 
-import "labrpc"
+import "raftKVDB/labrpc"
 import "crypto/rand"
 import "math/big"
 

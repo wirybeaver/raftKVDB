@@ -1,10 +1,10 @@
 package raftkv
 
 import (
-	"labgob"
-	"labrpc"
+	"raftKVDB/labgob"
+	"raftKVDB/labrpc"
 	"log"
-	"raft"
+	"raftKVDB/raft"
 	"sync"
 )
 
