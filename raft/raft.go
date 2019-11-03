@@ -126,7 +126,7 @@ func (rf *Raft) persist() {
 	// Example:
 	w := new(bytes.Buffer)
 	e := gob.NewEncoder(w)
-	if e.Encode(rf.CurrentTerm)!=nil || e.Encode(rf.CurrentTerm)!=nil || e.Encode(rf.Logs)!=nil {
+	if e.Encode(rf.CurrentTerm)!=nil || e.Encode(rf.VotedFor)!=nil || e.Encode(rf.Logs)!=nil {
 		DPrintf("Error: server  %d fail to write Persisted state", rf.me)
 	} else {
 		data := w.Bytes()
@@ -195,10 +195,13 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		return
 	}
 
+	change := false
 	reply.Term = args.Term
 	if args.Term > rf.CurrentTerm {
 		rf.CurrentTerm = args.Term
+		rf.VotedFor = -1
 		rf.goBackToFollower()
+		change=true
 	}
 
 	// Suspicious Point. I figure the second condition is necessary to avoid the loss of previous grant reply
@@ -208,7 +211,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		localLastLogIndex := rf.logIdxLocal2Global(idx)
 		if args.LastLogTerm > localLastLogTerm || args.LastLogTerm == localLastLogTerm && args.LastLogIndex >= localLastLogIndex {
 			//rf.state = FOLLOWER
-			rf.VotedFor = args.CandidateID
+			if rf.VotedFor == -1 {
+				rf.VotedFor = args.CandidateID
+				change = true
+			}
 			reply.VoteGranted = true
 			DPrintf("[%d] recvVote-GrantVote from candidate=[%d]\n req=[%v]\n reply=[]%v\n rf=[%v]", rf.me, args.CandidateID, args.str(), reply.str(), rf.str())
 			rf.resetTimerCh <- struct{}{}
@@ -216,6 +222,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		//else {
 		//	DPrintf("[%d] recvVote-NoVote-UpToDate from candidate=[%d]\n req=[%v]\n reply=[]%v\n rf=[%v]", rf.me, args.CandidateID, args.str(), reply.str(), rf.str())
 		//}
+	}
+	if change {
+		rf.persist()
 	}
 	//else{
 	//	DPrintf("[%d] recvVote-NoVote-1 from candidate=[%d]\n req=[%v]\n reply=[]%v\n rf=[%v]", rf.me, args.CandidateID, args.str(), reply.str(), rf.str())
@@ -268,9 +277,11 @@ func (rf *Raft) sendRequestVoteAndProcess (args *RequestVoteArgs, sendTo int) {
 	}
 	if reply.Term > rf.CurrentTerm {
 		rf.CurrentTerm = reply.Term
+		rf.VotedFor = -1
 		rf.goBackToFollower()
 		rf.resetTimerCh <- struct{}{}
 		DPrintf("Cand [%d] sendVote-FOLLOW to peer=[%d]\n req=[%v]\n reply=[%v]\n rf=[%v]", rf.me, sendTo, args.str(), reply.str(), rf.str())
+		rf.persist()
 		return
 	}
 
@@ -281,8 +292,7 @@ func (rf *Raft) sendRequestVoteAndProcess (args *RequestVoteArgs, sendTo int) {
 		if rf.voteCount > len(rf.peers)/2 {
 			// leader initialization
 			rf.state = LEADER
-			rf.voteCount = 0
-			rf.VotedFor = -1
+			//rf.voteCount = 0
 			for i:= range rf.nextIndex{
 				localIdx := len(rf.Logs)-1
 				rf.nextIndex[i] = rf.logIdxLocal2Global(localIdx)+1
@@ -333,14 +343,18 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 
+	change := false
 	reply.Term = args.Term
 	if rf.CurrentTerm < args.Term {
 		rf.CurrentTerm = args.Term
+		rf.VotedFor = -1
+		rf.goBackToFollower()
+		change = true
+	} else if rf.state!=FOLLOWER {
+		// candidate lose the leader election
+		rf.state = FOLLOWER
 	}
 
-	// Suspicious Point. I figure a peer MUST rewind back to the FOLLOWER state if it receives
-	// Append Queries with term >= rf.CurrentTerm
-	rf.goBackToFollower()
 	rf.resetTimerCh <- struct{}{}
 
 	localLastIdx := len(rf.Logs) - 1
@@ -375,6 +389,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	if j < len(args.Entries) {
 		rf.Logs = append(rf.Logs[:i], args.Entries[j:]...)
+		change = true
 	}
 
 	if args.LeaderCommit > rf.commitIndex {
@@ -385,6 +400,10 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.commitIndex = min(args.LeaderCommit, rf.logIdxLocal2Global(len(rf.Logs)-1))
 		DPrintf("[%d] recvAppend-Success-CommitUpdate from leader=[%d]\n rf=[%v]\n req=[%v]\n reply=[%v]", rf.me, args.LeaderID, rf.str(), args.str(), reply.str())
 		rf.commitCh <- struct{}{}
+	}
+
+	if change {
+		rf.persist()
 	}
 	//else {
 	//	DPrintf("[%d] recvAppend-Success-NoCommitUpdate from leader=[%d]\n rf=[%v]\n req=[%v]\n reply=[%v]", rf.me, args.LeaderID, rf.str(), args.str(), reply.str())
@@ -408,9 +427,11 @@ func (rf *Raft) sendAppendEntriesAndProcess(args *AppendEntriesArgs, server int)
 	}
 	if rf.CurrentTerm < reply.Term {
 		rf.CurrentTerm = reply.Term
+		rf.VotedFor = -1
 		rf.goBackToFollower()
 		rf.resetTimerCh <- struct{}{}
 		DPrintf("leader[%d] sendAppend-Follow to peer[%d]\n req=[%v]\n reply=[%v]\n rf=[%v]", rf.me, server, args.str(), reply.str(), rf.str())
+		rf.persist()
 		return
 	}
 	if reply.Success {
@@ -477,6 +498,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		rf.nextIndex[rf.me] = index+1
 		rf.matchIndex[rf.me] = index
 		go rf.fastBroadCastNewCommand()
+		rf.persist()
 	}
 
 	return index, term, isLeader
@@ -538,7 +560,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.applyCh = applyCh
 
 	// initialize from state persisted before a crash
-	//rf.readPersist(persister.ReadRaftState())
+	rf.readPersist(persister.ReadRaftState())
 
 	go rf.electionDaemon()      // kick off election
 	go rf.applyLogEntryDaemon() // distinguished thread to apply log up through commitIdx
@@ -585,6 +607,8 @@ func (rf *Raft) broadCastVote() {
 		}
 		go rf.sendRequestVoteAndProcess(voteReq, i)
 	}
+
+	rf.persist()
 }
 
 func (rf *Raft) heartBeatDaemon(){
@@ -694,7 +718,6 @@ func (rf *Raft) randomizeTimeout() time.Duration {
 // sending info to the Channel resetTimer often follows this function
 func (rf *Raft) goBackToFollower(){
 	rf.state = FOLLOWER
-	rf.VotedFor = -1
 	rf.voteCount = 0
 }
 
