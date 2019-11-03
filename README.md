@@ -23,32 +23,55 @@ Reference:
 Test Result
 - [x] 2A Leader Election
 ```
-➜  raft git:(master) go test -run 2A
+➜  raft git:(master) go test -run 2A          
 Test (2A): initial election ...
   ... Passed --   3.1  3   60    0
 Test (2A): election after network failure ...
-  ... Passed --   4.5  3  111    0
+  ... Passed --   4.5  3  110    0
 PASS
-ok      raftKVDB/raft   7.602s
+ok      raftKVDB/raft   7.540s
 ```
 
 - [x] 2B Log Replication
 ```
 ➜  raft git:(master) go test -run 2B
 Test (2B): basic agreement ...
-  ... Passed --   0.3  5   47    3
+  ... Passed --   0.3  5   32    3
 Test (2B): agreement despite follower disconnection ...
-  ... Passed --   5.6  3  123    8
+  ... Passed --   5.6  3  118    8
 Test (2B): no agreement if too many followers disconnect ...
-  ... Passed --   3.6  5  187    3
+  ... Passed --   3.6  5  195    3
 Test (2B): concurrent Start()s ...
-  ... Passed --   0.6  3   20    6
+  ... Passed --   0.7  3   21    6
 Test (2B): rejoin of partitioned leader ...
-  ... Passed --   6.3  3  189    4
+  ... Passed --   6.4  3  190    4
 Test (2B): leader backs up quickly over incorrect follower logs ...
-  ... Passed --  17.1  5 2104  102
+  ... Passed --  17.1  5 2106  102
 Test (2B): RPC counts aren't too high ...
-  ... Passed --   2.4  3   67   12
+  ... Passed --   2.0  3   58   12
 PASS
-ok      raftKVDB/raft   36.049s
+ok      raftKVDB/raft   35.638s
+```
+
+- [x] 2C Persist
+```
+➜  raft git:(master) go test -run 2C
+Test (2C): basic persistence ...
+  ... Passed --   5.6  3  134    7
+Test (2C): more persistence ...
+  ... Passed --  15.6  5  909   16
+Test (2C): partitioned leader and one follower crash, leader restarts ...
+  ... Passed --   1.4  3   40    4
+Test (2C): Figure 8 ...
+  ... Passed --  31.5  5 1231   62
+Test (2C): unreliable agreement ...
+  ... Passed --   1.6  5 1040  246
+Test (2C): Figure 8 (unreliable) ...
+  ... Passed --  33.4  5 10965  404
+Test (2C): churn ...
+  ... Passed --  16.4  5 12127 2868
+Test (2C): unreliable churn ...
+  ... Passed --  16.4  5 5572 1227
+PASS
+ok      raftKVDB/raft   121.955s
 ```
