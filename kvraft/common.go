@@ -3,7 +3,15 @@ package raftkv
 const (
 	OK       = "OK"
 	ErrNoKey = "ErrNoKey"
+	ErrFail  = "ErrFail"
 )
+
+const (
+	GET = iota
+	PUTAPPEND
+)
+
+const WAITRAFTINTERVAL = 400
 
 type Err string
 
@@ -25,6 +33,8 @@ type PutAppendReply struct {
 type GetArgs struct {
 	Key string
 	// You'll have to add definitions here.
+	ClientID uint64
+	CmdID uint64
 }
 
 type GetReply struct {

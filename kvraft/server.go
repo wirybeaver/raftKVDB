@@ -1,11 +1,12 @@
 package raftkv
 
 import (
+	"log"
 	"raftKVDB/labgob"
 	"raftKVDB/labrpc"
-	"log"
 	"raftKVDB/raft"
 	"sync"
+	"time"
 )
 
 const Debug = 0
@@ -22,6 +23,16 @@ type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	CmdType int
+	Key string
+	Val string
+	ClientID uint64
+	CmdID uint64
+}
+
+type DoneMsg struct {
+	ClientID uint64
+	CmdID uint64
 }
 
 type KVServer struct {
@@ -33,11 +44,43 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
+	dupMap map[uint64]uint64
+	applyStub map[int]chan DoneMsg
+	kvdb map[string]string
 }
 
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
+
+	_, isLeader := kv.rf.GetState()
+	reply.WrongLeader=!isLeader
+
+	opDone := kv.seenCmd(args.ClientID, args.CmdID)
+	if !opDone && isLeader {
+		operation := Op{
+			CmdType: GET,
+			Key: args.Key,
+			ClientID: args.ClientID,
+			CmdID: args.CmdID,
+		}
+
+		opDone = kv.enterOperation(operation)
+	}
+
+	if opDone {
+		kv.mu.Lock()
+		val,ok := kv.kvdb[args.Key]
+		kv.mu.Unlock()
+		if ok{
+			reply.Err = OK
+			reply.Value = val
+		} else {
+			reply.Err = ErrNoKey
+		}
+	} else {
+		reply.Err = ErrFail
+	}
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
@@ -86,4 +129,67 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	// You may need initialization code here.
 
 	return kv
+}
+
+func (kv *KVServer) enactDaemon(){
+	for {
+		select{
+		case appliedMsg := <-kv.applyCh :
+			if appliedMsg.CommandValid {
+				operation := appliedMsg.Command.(Op)
+				kv.mu.Lock()
+
+				if recordedCmdID, ok := kv.dupMap[operation.ClientID]; !ok || recordedCmdID < operation.CmdID {
+					if operation.CmdType==PUTAPPEND {
+						kv.kvdb[operation.Key] = operation.Val
+					}
+					kv.dupMap[operation.ClientID] = operation.ClientID
+				}
+
+				if _, ok := kv.applyStub[appliedMsg.CommandIndex]; !ok {
+					kv.applyStub[appliedMsg.CommandIndex] = make(chan DoneMsg, 1)
+				}
+				kv.applyStub[appliedMsg.CommandIndex] <- DoneMsg{
+					ClientID : operation.ClientID,
+					CmdID : operation.CmdID,
+				}
+				kv.mu.Unlock()
+			}
+		}
+	}
+}
+
+func (kv *KVServer) enterOperation(operation Op) bool{
+	raftIdx, _, isLeader :=kv.rf.Start(operation)
+	if !isLeader {
+		return false
+	}
+	kv.mu.Lock()
+	if _, ok := kv.applyStub[raftIdx]; !ok {
+		kv.applyStub[raftIdx]=make(chan DoneMsg, 1)
+	}
+	doneCh := kv.applyStub[raftIdx]
+	kv.mu.Unlock()
+
+	select {
+	case doneMsg := <-doneCh:
+		if doneMsg.ClientID == operation.ClientID && doneMsg.CmdID == operation.CmdID {
+			close(doneCh)
+			kv.mu.Lock()
+			delete(kv.applyStub, raftIdx)
+			kv.mu.Unlock()
+			return true
+		} else {
+			doneCh <- doneMsg
+		}
+	case <-time.After(WAITRAFTINTERVAL * time.Millisecond):
+	}
+	return false
+}
+
+func (kv *KVServer) seenCmd(clientID uint64, cmdID uint64) bool{
+	kv.mu.Lock()
+	lastCmd,ok := kv.dupMap[clientID]
+	kv.mu.Unlock()
+	return ok && cmdID<=lastCmd
 }
