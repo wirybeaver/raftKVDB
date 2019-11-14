@@ -23,7 +23,7 @@ type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
-	CmdType int
+	CmdType string
 	Key string
 	Val string
 	ClientID uint64
@@ -85,6 +85,31 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
+	_, isLeader := kv.rf.GetState()
+	reply.WrongLeader=!isLeader
+
+	opDone := kv.seenCmd(args.ClientID, args.CmdID)
+	if !opDone && isLeader {
+		operation := Op{
+			Key: args.Key,
+			Val: args.Value,
+			ClientID: args.ClientID,
+			CmdID: args.CmdID,
+		}
+		if args.Op == PUT {
+			operation.CmdType = PUT
+		} else {
+			operation.CmdType = APPEND
+		}
+
+		opDone = kv.enterOperation(operation)
+	}
+
+	if opDone {
+		reply.Err = OK
+	} else {
+		reply.Err = ErrFail
+	}
 }
 
 //
@@ -127,6 +152,11 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
 	// You may need initialization code here.
+	kv.dupMap = make(map[uint64]uint64)
+	kv.applyStub = make(map[int]chan DoneMsg)
+	kv.kvdb = make(map[string]string)
+
+	go kv.enactDaemon()
 
 	return kv
 }
@@ -140,8 +170,10 @@ func (kv *KVServer) enactDaemon(){
 				kv.mu.Lock()
 
 				if recordedCmdID, ok := kv.dupMap[operation.ClientID]; !ok || recordedCmdID < operation.CmdID {
-					if operation.CmdType==PUTAPPEND {
+					if operation.CmdType==PUT {
 						kv.kvdb[operation.Key] = operation.Val
+					} else if operation.CmdType==APPEND {
+						kv.kvdb[operation.Key] += operation.Val
 					}
 					kv.dupMap[operation.ClientID] = operation.ClientID
 				}

@@ -7,8 +7,9 @@ const (
 )
 
 const (
-	GET = iota
-	PUTAPPEND
+	GET = "Get"
+	PUT = "Put"
+	APPEND = "Append"
 )
 
 const WAITRAFTINTERVAL = 400
@@ -23,6 +24,8 @@ type PutAppendArgs struct {
 	// You'll have to add definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	ClientID uint64
+	CmdID uint64
 }
 
 type PutAppendReply struct {
