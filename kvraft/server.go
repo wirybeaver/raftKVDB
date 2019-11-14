@@ -81,6 +81,8 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	} else {
 		reply.Err = ErrFail
 	}
+
+	reply.LeaderID = kv.rf.GetLeaderID()
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
@@ -110,6 +112,8 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	} else {
 		reply.Err = ErrFail
 	}
+
+	reply.LeaderID = kv.rf.GetLeaderID()
 }
 
 //
