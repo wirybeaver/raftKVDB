@@ -1,6 +1,6 @@
 package raftkv
 
-import "linearizability"
+import "raftKVDB/linearizability"
 
 import "testing"
 import "strconv"
