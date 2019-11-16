@@ -53,28 +53,27 @@ type KVServer struct {
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
 
-	DPrintf("Server=%v, GetArgs=%v", args)
+	//DPrintf("Server=%v, Client=%v, GetCmdID=%v", kv.me, args.ClientID, args.CmdID)
 	_, isLeader := kv.rf.GetState()
 	reply.WrongLeader=!isLeader
-	DPrintf("Server=%v, isLeader=%v", kv.me, isLeader)
 	opDone := kv.seenCmd(args.ClientID, args.CmdID)
-	DPrintf("Server=%v, Client=%v, GetCmdID=%v, isDupCmd=%", kv.me, args.ClientID, args.CmdID, opDone)
-	if !opDone && isLeader {
+	DPrintf("Server=%v, isLeader=%v, Client=%v, GetCmdID=%v, isDupCmd=%v", kv.me, isLeader, args.ClientID, args.CmdID, opDone)
+	if !opDone && isLeader==true {
 		operation := Op{
 			CmdType: GET,
 			Key: args.Key,
 			ClientID: args.ClientID,
 			CmdID: args.CmdID,
 		}
-		DPrintf("Server=%v, Client=%v, GetCmdID=%v, EnterOp=%v", kv.me, args.ClientID, args.CmdID, operation)
+		//DPrintf("Server=%v, Client=%v, GetCmdID=%v, EnterOp=%v", kv.me, args.ClientID, args.CmdID, operation)
 		opDone = kv.enterOperation(operation)
-		DPrintf("Server=%v, Client=%v, GetCmdID=%v, EnterOpSuccess=%v", kv.me, args.ClientID, args.CmdID, opDone)
+		//DPrintf("Server=%v, Client=%v, GetCmdID=%v, EnterOpSuccess=%v", kv.me, args.ClientID, args.CmdID, opDone)
 	}
 
 	if opDone {
 		kv.mu.Lock()
 		val,ok := kv.kvdb[args.Key]
-		DPrintf("Server=%v, Client=%v, GetCmdID=%v, Key=%v, Contains=%v, Val=%v", kv.me, args.ClientID, args.CmdID, args.Key, ok, val)
+		//DPrintf("Server=%v, Client=%v, GetCmdID=%v, Key=%v, Contains=%v, Val=%v", kv.me, args.ClientID, args.CmdID, args.Key, ok, val)
 		kv.mu.Unlock()
 		if ok{
 			reply.Err = OK
@@ -86,20 +85,19 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		reply.Err = ErrFail
 	}
 
-	reply.LeaderID = kv.rf.GetLeaderID()
+	//reply.LeaderID = kv.rf.GetLeaderID()
 
-	DPrintf("Server=%v, Client=%v, GetCmdID=%v, reply=%v", kv.me, args.ClientID, args.CmdID, reply)
+	//DPrintf("Server=%v, Client=%v, GetCmdID=%v, reply=%v", kv.me, args.ClientID, args.CmdID, reply)
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
-	DPrintf("Server=%v, Client=%v, PutCmdId=%v", kv.me, args.ClientID, args.CmdID)
+	//DPrintf("Server=%v, Client=%v, PutCmdID=%v", kv.me, args.ClientID, args.CmdID)
 	_, isLeader := kv.rf.GetState()
 	reply.WrongLeader=!isLeader
-	DPrintf("Server=%v, isLeader=%v", kv.me, isLeader)
 	opDone := kv.seenCmd(args.ClientID, args.CmdID)
-	DPrintf("Server=%v, Client=%v, PutCmdID=%v, isDupCmd=%", kv.me, args.ClientID, args.CmdID, opDone)
-	if !opDone && isLeader {
+	DPrintf("Server=%v, isLeader=%v, Client=%v, PutCmdID=%v, isNewCmd=%v", kv.me, isLeader, args.ClientID, args.CmdID, !opDone)
+	if !opDone && isLeader==true {
 		operation := Op{
 			Key: args.Key,
 			Val: args.Value,
@@ -111,9 +109,9 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		} else {
 			operation.CmdType = APPEND
 		}
-		DPrintf("Server=%v, Client=%v, PutCmdID=%v, EnterOp=%v", kv.me, args.ClientID, args.CmdID, operation)
+		//DPrintf("Server=%v, Client=%v, PutCmdID=%v, EnterOp=%v", kv.me, args.ClientID, args.CmdID, operation)
 		opDone = kv.enterOperation(operation)
-		DPrintf("Server=%v, Client=%v, PutCmdID=%v, EnterOpSuccess=%v", kv.me, args.ClientID, args.CmdID, opDone)
+		//DPrintf("Server=%v, Client=%v, PutCmdID=%v, EnterOpSuccess=%v", kv.me, args.ClientID, args.CmdID, opDone)
 	}
 
 	if opDone {
@@ -122,8 +120,8 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		reply.Err = ErrFail
 	}
 
-	reply.LeaderID = kv.rf.GetLeaderID()
-	DPrintf("Server=%v, Client=%v, PutCmdID=%v, reply=%v", kv.me, args.ClientID, args.CmdID, reply)
+	//reply.LeaderID = kv.rf.GetLeaderID()
+	//DPrintf("Server=%v, Client=%v, PutCmdID=%v, reply=%v", kv.me, args.ClientID, args.CmdID, reply)
 }
 
 //
@@ -163,7 +161,6 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	// You may need initialization code here.
 
 	kv.applyCh = make(chan raft.ApplyMsg)
-	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
 	// You may need initialization code here.
 	kv.dupMap = make(map[uint64]uint64)
@@ -172,6 +169,8 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	go kv.enactDaemon()
 
+	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
+
 	return kv
 }
 
@@ -179,22 +178,25 @@ func (kv *KVServer) enactDaemon(){
 	for {
 		select{
 		case appliedMsg := <-kv.applyCh :
+			operation := appliedMsg.Command.(Op)
+			//DPrintf("Server=%v, applyCh receive ClientID=%v, QueryID=%v, RaftLogID=%v, Op=%v",
+			//	kv.me, operation.ClientID, operation.CmdID, appliedMsg.CommandIndex, operation)
 			if appliedMsg.CommandValid {
-				operation := appliedMsg.Command.(Op)
 				kv.mu.Lock()
-				DPrintf("Server=%v, Op=%v", kv.me, operation)
 				if recordedCmdID, ok := kv.dupMap[operation.ClientID]; !ok || recordedCmdID < operation.CmdID {
+					//DPrintf("Server=%v, Raft ClientID=%v, CmdID=%v, is a new command",
+					//	kv.me, operation.ClientID, operation.CmdID)
 					if operation.CmdType==PUT {
 						kv.kvdb[operation.Key] = operation.Val
 					} else if operation.CmdType==APPEND {
 						kv.kvdb[operation.Key] += operation.Val
 					}
-					kv.dupMap[operation.ClientID] = operation.ClientID
+					kv.dupMap[operation.ClientID] = operation.CmdID
 				}
 
-				//if _, ok := kv.applyStub[appliedMsg.CommandIndex]; !ok {
-				//	kv.applyStub[appliedMsg.CommandIndex] = make(chan DoneMsg, 1)
-				//}
+				if _, ok := kv.applyStub[appliedMsg.CommandIndex]; !ok {
+					kv.applyStub[appliedMsg.CommandIndex] = make(chan DoneMsg, 1)
+				}
 				ch := kv.applyStub[appliedMsg.CommandIndex]
 				select {
 					case <- ch:
@@ -212,7 +214,7 @@ func (kv *KVServer) enactDaemon(){
 
 func (kv *KVServer) enterOperation(operation Op) bool{
 	raftIdx, _, isLeader :=kv.rf.Start(operation)
-	DPrintf("Server=%v, raftLogId=%v, isLeader=%v, Op=%v", kv.me, raftIdx, isLeader, operation)
+	//DPrintf("Server=%v, isLeader=%v, LogReplica, raftLogId=%v, term=%v, CmdID=%v, Op=%v", kv.me, isLeader, raftIdx, term, operation.CmdID, operation)
 	if !isLeader {
 		return false
 	}
@@ -230,14 +232,14 @@ func (kv *KVServer) enterOperation(operation Op) bool{
 			kv.mu.Lock()
 			delete(kv.applyStub, raftIdx)
 			kv.mu.Unlock()
-			DPrintf("Server=%v, ClientID=%v, CmdID=%v, SuccessToEnter raftLogID=%v", kv.me, operation.ClientID, operation.CmdID, raftIdx)
+			DPrintf("Server=%v, ClientID=%v, CmdID=%v, SuccessToEnter at raftLogID=%v", kv.me, operation.ClientID, operation.CmdID, raftIdx)
 			return true
 		} else {
 			doneCh <- doneMsg
 		}
 	case <-time.After(WAITRAFTINTERVAL * time.Millisecond):
 	}
-	DPrintf("Server=%v, ClientID=%v, CmdID=%v, FailToEnter raftLogID=%v", kv.me, operation.ClientID, operation.CmdID, raftIdx)
+	DPrintf("Server=%v, ClientID=%v, CmdID=%v, FailToEnter at raftLogID=%v", kv.me, operation.ClientID, operation.CmdID, raftIdx)
 	return false
 }
 

@@ -2,6 +2,7 @@ package raftkv
 
 import (
 	"raftKVDB/labrpc"
+	"sync"
 )
 import "crypto/rand"
 import "math/big"
@@ -13,6 +14,7 @@ type Clerk struct {
 	leadId int
 	clientID uint64
 	nextSeq uint64
+	mu sync.Mutex
 }
 
 func nrand() int64 {
@@ -46,23 +48,32 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 //
 func (ck *Clerk) Get(key string) string {
 	// You will have to modify this function.
+	ck.mu.Lock()
 	cmdSeq := ck.nextSeq
 	ck.nextSeq++
+	ck.mu.Unlock()
+
 	for {
 		args := &GetArgs{
-			Key: GET,
+			Key: key,
 			ClientID: ck.clientID,
 			CmdID: cmdSeq,
 		}
 
 		reply := &GetReply{
-			LeaderID: -1,
+			//LeaderID: -1,
 		}
-
-		DPrintf("Client %v send Query=%v", ck.clientID, args)
+		ck.mu.Lock()
+		DPrintf("Client=%v, ToServer=%v, queryID=%v, send Query=%v", ck.clientID, ck.leadId, args.CmdID, args)
 		ok := ck.servers[ck.leadId].Call("KVServer.Get", args, reply)
-		DPrintf("Client %v receive Query=%v", ck.clientID, reply)
-
+		DPrintf("Client=%v, ToServer=%v, queryID=%v, reply=%v, isLeader=%v", ck.clientID, ck.leadId, args.CmdID, reply, !reply.WrongLeader)
+		DPrintf("\n")
+		ck.mu.Unlock()
+		if !ok || reply.WrongLeader {
+			ck.mu.Lock()
+			ck.leadId = (ck.leadId+1)%len(ck.servers)
+			ck.mu.Unlock()
+		}
 		if ok {
 			if reply.Err==OK{
 				return reply.Value
@@ -70,11 +81,11 @@ func (ck *Clerk) Get(key string) string {
 				return ""
 			}
 		}
-		if reply.LeaderID>-1 {
-			ck.leadId = reply.LeaderID
-		} else{
-			ck.leadId = (ck.leadId+1)%len(ck.servers)
-		}
+		//if reply.LeaderID>-1 {
+		//	ck.leadId = reply.LeaderID
+		//} else{
+		//	ck.leadId = (ck.leadId+1)%len(ck.servers)
+		//}
 	}
 }
 
@@ -90,9 +101,10 @@ func (ck *Clerk) Get(key string) string {
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
+	ck.mu.Lock()
 	cmdSeq := ck.nextSeq
 	ck.nextSeq++
-
+	ck.mu.Unlock()
 	for {
 		args := &PutAppendArgs{
 			Key: key,
@@ -102,22 +114,28 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 			CmdID: cmdSeq,
 		}
 		reply := &PutAppendReply{
-			LeaderID: -1,
+			//LeaderID: -1,
 		}
-		DPrintf("Client %v send Query=%v", ck.clientID, args)
+		DPrintf("Client=%v, ToServer=%v, queryID=%v, send Query=%v", ck.clientID, ck.leadId, args.CmdID, args)
 		ok := ck.servers[ck.leadId].Call("KVServer.PutAppend", args, reply)
-		DPrintf("Client %v send Query=%v", ck.clientID, reply)
+		DPrintf("Client=%v, ToServer=%v, queryID=%v, reply=%v, isLeader=%v", ck.clientID, ck.leadId, args.CmdID, reply, !reply.WrongLeader)
+		DPrintf("\n")
+		if !ok || reply.WrongLeader {
+			ck.mu.Lock()
+			ck.leadId = (ck.leadId+1)%len(ck.servers)
+			ck.mu.Unlock()
+		}
 		if ok {
 			if reply.Err==OK {
 				return
 			}
 		}
 
-		if reply.LeaderID>-1 {
-			ck.leadId = reply.LeaderID
-		} else {
-			ck.leadId = (ck.leadId+1)%len(ck.servers)
-		}
+		//if reply.LeaderID>-1 {
+		//	ck.leadId = reply.LeaderID
+		//} else {
+		//	ck.leadId = (ck.leadId+1)%len(ck.servers)
+		//}
 	}
 }
 
