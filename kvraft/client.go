@@ -2,7 +2,6 @@ package raftkv
 
 import (
 	"raftKVDB/labrpc"
-	"sync"
 )
 import "crypto/rand"
 import "math/big"
@@ -11,7 +10,6 @@ import "math/big"
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// You will have to modify this struct.
-	mu sync.Mutex
 	leadId int
 	clientID uint64
 	nextSeq uint64
@@ -49,9 +47,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 func (ck *Clerk) Get(key string) string {
 	// You will have to modify this function.
 	cmdSeq := ck.nextSeq
-	ck.mu.Lock()
 	ck.nextSeq++
-	ck.mu.Unlock()
 	for {
 		args := &GetArgs{
 			Key: GET,
@@ -62,7 +58,10 @@ func (ck *Clerk) Get(key string) string {
 		reply := &GetReply{
 			LeaderID: -1,
 		}
+
+		DPrintf("Client %v send Query=%v", ck.clientID, args)
 		ok := ck.servers[ck.leadId].Call("KVServer.Get", args, reply)
+		DPrintf("Client %v receive Query=%v", ck.clientID, reply)
 
 		if ok {
 			if reply.Err==OK{
@@ -92,9 +91,7 @@ func (ck *Clerk) Get(key string) string {
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
 	cmdSeq := ck.nextSeq
-	ck.mu.Lock()
 	ck.nextSeq++
-	ck.mu.Unlock()
 
 	for {
 		args := &PutAppendArgs{
@@ -107,8 +104,9 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		reply := &PutAppendReply{
 			LeaderID: -1,
 		}
-
+		DPrintf("Client %v send Query=%v", ck.clientID, args)
 		ok := ck.servers[ck.leadId].Call("KVServer.PutAppend", args, reply)
+		DPrintf("Client %v send Query=%v", ck.clientID, reply)
 		if ok {
 			if reply.Err==OK {
 				return

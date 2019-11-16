@@ -12,7 +12,7 @@ const (
 	APPEND = "Append"
 )
 
-const WAITRAFTINTERVAL = 400
+const WAITRAFTINTERVAL = 1000
 
 type Err string
 

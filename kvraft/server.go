@@ -53,10 +53,12 @@ type KVServer struct {
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
 
+	DPrintf("Server=%v, GetArgs=%v", args)
 	_, isLeader := kv.rf.GetState()
 	reply.WrongLeader=!isLeader
-
+	DPrintf("Server=%v, isLeader=%v", kv.me, isLeader)
 	opDone := kv.seenCmd(args.ClientID, args.CmdID)
+	DPrintf("Server=%v, Client=%v, GetCmdID=%v, isDupCmd=%", kv.me, args.ClientID, args.CmdID, opDone)
 	if !opDone && isLeader {
 		operation := Op{
 			CmdType: GET,
@@ -64,13 +66,15 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 			ClientID: args.ClientID,
 			CmdID: args.CmdID,
 		}
-
+		DPrintf("Server=%v, Client=%v, GetCmdID=%v, EnterOp=%v", kv.me, args.ClientID, args.CmdID, operation)
 		opDone = kv.enterOperation(operation)
+		DPrintf("Server=%v, Client=%v, GetCmdID=%v, EnterOpSuccess=%v", kv.me, args.ClientID, args.CmdID, opDone)
 	}
 
 	if opDone {
 		kv.mu.Lock()
 		val,ok := kv.kvdb[args.Key]
+		DPrintf("Server=%v, Client=%v, GetCmdID=%v, Key=%v, Contains=%v, Val=%v", kv.me, args.ClientID, args.CmdID, args.Key, ok, val)
 		kv.mu.Unlock()
 		if ok{
 			reply.Err = OK
@@ -83,14 +87,18 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	}
 
 	reply.LeaderID = kv.rf.GetLeaderID()
+
+	DPrintf("Server=%v, Client=%v, GetCmdID=%v, reply=%v", kv.me, args.ClientID, args.CmdID, reply)
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
+	DPrintf("Server=%v, Client=%v, PutCmdId=%v", kv.me, args.ClientID, args.CmdID)
 	_, isLeader := kv.rf.GetState()
 	reply.WrongLeader=!isLeader
-
+	DPrintf("Server=%v, isLeader=%v", kv.me, isLeader)
 	opDone := kv.seenCmd(args.ClientID, args.CmdID)
+	DPrintf("Server=%v, Client=%v, PutCmdID=%v, isDupCmd=%", kv.me, args.ClientID, args.CmdID, opDone)
 	if !opDone && isLeader {
 		operation := Op{
 			Key: args.Key,
@@ -103,8 +111,9 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		} else {
 			operation.CmdType = APPEND
 		}
-
+		DPrintf("Server=%v, Client=%v, PutCmdID=%v, EnterOp=%v", kv.me, args.ClientID, args.CmdID, operation)
 		opDone = kv.enterOperation(operation)
+		DPrintf("Server=%v, Client=%v, PutCmdID=%v, EnterOpSuccess=%v", kv.me, args.ClientID, args.CmdID, opDone)
 	}
 
 	if opDone {
@@ -114,6 +123,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	}
 
 	reply.LeaderID = kv.rf.GetLeaderID()
+	DPrintf("Server=%v, Client=%v, PutCmdID=%v, reply=%v", kv.me, args.ClientID, args.CmdID, reply)
 }
 
 //
@@ -172,7 +182,7 @@ func (kv *KVServer) enactDaemon(){
 			if appliedMsg.CommandValid {
 				operation := appliedMsg.Command.(Op)
 				kv.mu.Lock()
-
+				DPrintf("Server=%v, Op=%v", kv.me, operation)
 				if recordedCmdID, ok := kv.dupMap[operation.ClientID]; !ok || recordedCmdID < operation.CmdID {
 					if operation.CmdType==PUT {
 						kv.kvdb[operation.Key] = operation.Val
@@ -182,10 +192,15 @@ func (kv *KVServer) enactDaemon(){
 					kv.dupMap[operation.ClientID] = operation.ClientID
 				}
 
-				if _, ok := kv.applyStub[appliedMsg.CommandIndex]; !ok {
-					kv.applyStub[appliedMsg.CommandIndex] = make(chan DoneMsg, 1)
+				//if _, ok := kv.applyStub[appliedMsg.CommandIndex]; !ok {
+				//	kv.applyStub[appliedMsg.CommandIndex] = make(chan DoneMsg, 1)
+				//}
+				ch := kv.applyStub[appliedMsg.CommandIndex]
+				select {
+					case <- ch:
+					default:
 				}
-				kv.applyStub[appliedMsg.CommandIndex] <- DoneMsg{
+				ch <- DoneMsg{
 					ClientID : operation.ClientID,
 					CmdID : operation.CmdID,
 				}
@@ -197,6 +212,7 @@ func (kv *KVServer) enactDaemon(){
 
 func (kv *KVServer) enterOperation(operation Op) bool{
 	raftIdx, _, isLeader :=kv.rf.Start(operation)
+	DPrintf("Server=%v, raftLogId=%v, isLeader=%v, Op=%v", kv.me, raftIdx, isLeader, operation)
 	if !isLeader {
 		return false
 	}
@@ -214,12 +230,14 @@ func (kv *KVServer) enterOperation(operation Op) bool{
 			kv.mu.Lock()
 			delete(kv.applyStub, raftIdx)
 			kv.mu.Unlock()
+			DPrintf("Server=%v, ClientID=%v, CmdID=%v, SuccessToEnter raftLogID=%v", kv.me, operation.ClientID, operation.CmdID, raftIdx)
 			return true
 		} else {
 			doneCh <- doneMsg
 		}
 	case <-time.After(WAITRAFTINTERVAL * time.Millisecond):
 	}
+	DPrintf("Server=%v, ClientID=%v, CmdID=%v, FailToEnter raftLogID=%v", kv.me, operation.ClientID, operation.CmdID, raftIdx)
 	return false
 }
 
