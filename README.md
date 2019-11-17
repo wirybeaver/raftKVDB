@@ -5,11 +5,11 @@ Optimization:
 - DONE
     - Quickly backup over incorrect
     - Try to remove mutex on applyDaemon loop, since there's no data race when read committed log. But it seems useless to improve performance.
-    - Speed up Read. Current Read is perceived as the same as PutAppend. However KVserver ID may not be identical to its Raft peer ID per the test setting.
 - TODO
     - Find the median of matchIndex using Quick Selection. The running time is linear. Current strategy is to justify one peer's latest commitIdx when receive the AppendEntries Reply. The frequency of updating leader's commit is relatively low for current strategy 
     - Replace commitChannel with a Conditional Variable. Current commitChannel has 100 cache slots. In the extreme case, the write throughput could be super high and may results in dead lock.
     - Exponential BackOff for RPC
+    - Speed up Client's Read Req. Current Read is perceived as the same as PutAppend. However KVserver ID may not be identical to its Raft peer ID per the test setting.
 
 Tricky Bug not mentioned in the paper and MIT's handout
 - When election timeout elapses, check the current state before canvassing votes. If the node is leader, do nothing.
