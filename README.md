@@ -78,37 +78,37 @@ ok      raftKVDB/raft   121.955s
 
 - [x] 3A Client Interaction
 ```
-➜  kvraft git:(master) go test -run 3A                
+➜  kvraft git:(master) go test -run 3A
 Test: one client (3A) ...
-  ... Passed --  15.0  5 18289 2240
+  ... Passed --  15.0  5 11854 2245
 Test: many clients (3A) ...
-  ... Passed --  15.3  5 35575 2820
+  ... Passed --  15.3  5 35420 2785
 Test: unreliable net, many clients (3A) ...
-  ... Passed --  16.0  5 11028 1736
+  ... Passed --  15.8  5 10515 1581
 Test: concurrent append to same key, unreliable (3A) ...
-  ... Passed --   0.9  3   229   52
+  ... Passed --   0.9  3   235   52
 Test: progress in majority (3A) ...
-  ... Passed --   0.5  5    58    2
+  ... Passed --   0.5  5    56    2
 Test: no progress in minority (3A) ...
-  ... Passed --   1.0  5   111    3
+  ... Passed --   1.0  5   108    3
 Test: completion after heal (3A) ...
-  ... Passed --   1.0  5    64    3
+  ... Passed --   1.0  5    67    3
 Test: partitions, one client (3A) ...
-  ... Passed --  22.7  5 10621 1881
+  ... Passed --  22.0  5 19683 1729
 Test: partitions, many clients (3A) ...
-  ... Passed --  23.1  5 94597 2475
+  ... Passed --  22.7  5 67288 2434
 Test: restarts, one client (3A) ...
-  ... Passed --  19.5  5 36455 2398
+  ... Passed --  19.1  5 30636 2407
 Test: restarts, many clients (3A) ...
-  ... Passed --  19.7  5 76919 2927
+  ... Passed --  19.8  5 98377 2874
 Test: unreliable net, restarts, many clients (3A) ...
-  ... Passed --  20.6  5 11724 1684
+  ... Passed --  20.4  5 11413 1591
 Test: restarts, partitions, many clients (3A) ...
-  ... Passed --  26.5  5 55524 2265
+  ... Passed --  26.8  5 57615 2176
 Test: unreliable net, restarts, partitions, many clients (3A) ...
-  ... Passed --  27.7  5  8707 1140
+  ... Passed --  28.1  5  7173  811
 Test: unreliable net, restarts, partitions, many clients, linearizability checks (3A) ...
-  ... Passed --  25.0  7 21260 1672
+  ... Passed --  25.2  7 19555 1578
 PASS
-ok      raftKVDB/kvraft 235.103s
+ok      raftKVDB/kvraft 234.067s
 ```
