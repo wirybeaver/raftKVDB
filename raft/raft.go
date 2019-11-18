@@ -20,6 +20,7 @@ package raft
 import (
 	"bytes"
 	"encoding/gob"
+	//"log/syslog"
 	"math/rand"
 	"sync"
 	"time"
@@ -47,6 +48,7 @@ type ApplyMsg struct {
 	CommandIndex       int
 	Command     interface{}
 	CommandValid bool   // ignore for lab2; only used in lab3
+	SnapShot []byte
 }
 
 type LogEntry struct {
@@ -83,6 +85,8 @@ type Raft struct {
 	CurrentTerm int        // Persisted before responding to RPCs
 	VotedFor    int        // Persisted before responding to RPCs
 	Logs        []LogEntry // Persisted before responding to RPCs
+	SnapshotIndex int      // Used for snapshot
+
 	commitIndex int        // Volatile state on all servers
 	lastApplied int        // Volatile state on all servers
 	nextIndex   []int      // Leader only, reinitialized after election
@@ -132,6 +136,15 @@ func (rf *Raft) persist() {
 		data := w.Bytes()
 		rf.persister.SaveRaftState(data)
 	}
+}
+
+func (rf *Raft) encodeState() []byte {
+	w := new(bytes.Buffer)
+	e := gob.NewEncoder(w)
+	if e.Encode(rf.CurrentTerm)!=nil || e.Encode(rf.VotedFor)!=nil || e.Encode(rf.Logs)!=nil || e.Encode(rf.SnapshotIndex)!=nil {
+		DPrintf("Error: server  %d fail to write Persisted state", rf.me)
+	}
+	return w.Bytes()
 }
 
 //
@@ -359,21 +372,25 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	localLastIdx := len(rf.Logs) - 1
 	localPrevIdx := rf.logIdxGlobal2Local(args.PrevLogIndex)
-	if localPrevIdx > localLastIdx || rf.Logs[localPrevIdx].Term != args.PrevLogTerm {
-		reply.Success = false
-		if localLastIdx < localPrevIdx {
-			reply.ConflictIndex = rf.logIdxLocal2Global(localLastIdx) + 1
-		} else {
-			// find the head index whose term is the same as PrevLog's term
-			var i = localPrevIdx
-			var t = rf.Logs[i].Term
-			for ; i>0; i-- {
-				if rf.Logs[i-1].Term != t {
-					break
-				}
+
+	if args.PrevLogIndex<=rf.SnapshotIndex {
+		reply.ConflictIndex = rf.SnapshotIndex + 1
+		DPrintf("[%d] recvAppend-Conflict from leader=[%d]\n rf=[%v]\n req=[%v]\n reply=[%v]", rf.me, args.LeaderID, rf.str(), args.str(), reply.str())
+		return
+	} else if localPrevIdx > localLastIdx{
+		reply.ConflictIndex = rf.logIdxLocal2Global(localLastIdx) + 1
+		DPrintf("[%d] recvAppend-Conflict from leader=[%d]\n rf=[%v]\n req=[%v]\n reply=[%v]", rf.me, args.LeaderID, rf.str(), args.str(), reply.str())
+		return
+	} else if rf.Logs[localPrevIdx].Term != args.PrevLogTerm {
+		// find the head index whose term is the same as PrevLog's term
+		var i = localPrevIdx
+		var t = rf.Logs[i].Term
+		for ; i>0; i-- {
+			if rf.Logs[i-1].Term != t {
+				break
 			}
-			reply.ConflictIndex = rf.logIdxLocal2Global(i)
 		}
+		reply.ConflictIndex = rf.logIdxLocal2Global(i)
 		DPrintf("[%d] recvAppend-Conflict from leader=[%d]\n rf=[%v]\n req=[%v]\n reply=[%v]", rf.me, args.LeaderID, rf.str(), args.str(), reply.str())
 		return
 	}
@@ -466,6 +483,86 @@ func (rf *Raft) sendAppendEntriesAndProcess(args *AppendEntriesArgs, server int)
 		DPrintf("leader[%d] sendAppend-HasConflict to peer[%d]\n req=[%v]\n reply=[%v]\n rf=[%v]", rf.me, server, args.str(), reply.str(), rf.str())
 	}
 
+}
+
+// InstallSnapShot RPC
+type InstallSnapshotArgs struct {
+	Term              int // leader's term
+	LeaderID          int
+	LastIncludedIndex int
+	LastIncludedTerm  int
+	Snapshot          []byte
+}
+
+type InstallSnapshotReply struct {
+	Term int // for leader to update itself
+}
+
+func (rf *Raft) InstallSnapShot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if args.Term < rf.CurrentTerm {
+		reply.Term = rf.CurrentTerm
+		//DPrintf("[%d] recvAppend-StaleRequest from leader=[%d]\n rf=[%v]\n req=[%v]\n reply=[%v]", rf.me, args.LeaderID, rf.str(), args.str(), reply.str())
+		return
+	}
+
+	change := false
+	reply.Term = args.Term
+	if rf.CurrentTerm < args.Term {
+		rf.CurrentTerm = args.Term
+		rf.VotedFor = -1
+		rf.goBackToFollower()
+		change = true
+	} else if rf.state!=FOLLOWER {
+		// candidate lose the leader election
+		rf.state = FOLLOWER
+	}
+
+	rf.resetTimerCh <- struct{}{}
+	if args.LastIncludedIndex <= rf.SnapshotIndex {
+		if change {
+			rf.persist()
+		}
+		return
+	}
+
+	globalLastIdx := rf.logIdxLocal2Global(len(rf.Logs)-1)
+	size := 1 + max(globalLastIdx-args.LastIncludedIndex, 0)
+	newLog := make([]LogEntry, size)
+	newLog[0] = LogEntry{
+		Term: args.LastIncludedTerm,
+		Command: nil,
+	}
+	if size>1 {
+		localArgsLastIncludedTerm := rf.logIdxGlobal2Local(args.LastIncludedTerm)
+		copy(newLog[1:], rf.Logs[localArgsLastIncludedTerm+1:])
+	}
+
+	if args.LastIncludedIndex > rf.lastApplied {
+		rf.lastApplied = args.LastIncludedIndex
+	}
+
+	if args.LastIncludedIndex > rf.commitIndex {
+		rf.commitIndex = args.LastIncludedIndex
+	}
+
+	rf.Logs = newLog
+	rf.SnapshotIndex = args.LastIncludedIndex
+
+	state := rf.encodeState()
+	rf.persister.SaveStateAndSnapshot(state, args.Snapshot)
+	go rf.notifyAppUseNewSnapShot(args.Snapshot)
+}
+
+func (rf *Raft) notifyAppUseNewSnapShot(snapshot []byte) {
+	if snapshot==nil || len(snapshot)<1 {
+		return
+	}
+	rf.applyCh <- ApplyMsg{
+		CommandValid:false,
+		SnapShot: snapshot,
+	}
 }
 
 //
@@ -645,17 +742,21 @@ func (rf *Raft) checkConsistency(to int) {
 		return
 	}
 	prevIdx := rf.nextIndex[to]-1
-	localIdx := rf.logIdxGlobal2Local(prevIdx)
-	request := &AppendEntriesArgs{
-		Term : rf.CurrentTerm,
-		LeaderID: rf.me,
-		PrevLogIndex: prevIdx,
-		PrevLogTerm: rf.Logs[localIdx].Term,
-		Entries: nil,
-		LeaderCommit: rf.commitIndex,
+	if prevIdx<=rf.SnapshotIndex {
+
+	} else {
+		localIdx := rf.logIdxGlobal2Local(prevIdx)
+		request := &AppendEntriesArgs{
+			Term : rf.CurrentTerm,
+			LeaderID: rf.me,
+			PrevLogIndex: prevIdx,
+			PrevLogTerm: rf.Logs[localIdx].Term,
+			Entries: nil,
+			LeaderCommit: rf.commitIndex,
+		}
+		request.Entries = append(request.Entries, rf.Logs[localIdx+1:]...)
+		go rf.sendAppendEntriesAndProcess(request, to)
 	}
-	request.Entries = append(request.Entries, rf.Logs[localIdx+1:]...)
-	go rf.sendAppendEntriesAndProcess(request, to)
 }
 
 func (rf *Raft) applyLogEntryDaemon() {
