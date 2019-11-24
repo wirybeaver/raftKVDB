@@ -639,7 +639,7 @@ func (rf *Raft) Compact(cmdIndex int, snapshot [] byte) {
 	rf.SnapshotIndex = cmdIndex
 	raftState := rf.encodeState()
 
-	DPrintf("After compact: %s, rfStateSize=%d", rf.str(), len(raftState))
+	DPrintf("After compact: %s", rf.str())
 
 	rf.persister.SaveStateAndSnapshot(raftState, snapshot)
 }
@@ -915,17 +915,9 @@ func (rf *Raft) goBackToFollower(){
 }
 
 func (rf *Raft) str() string {
-	//str1 := fmt.Sprintf("me=%d, T=%d, VotedFor=%d, commitIdx=%d, lastApplies=%d, state=%d, voteCnt=%d\n logs=%v\n",
-	//	rf.me, rf.CurrentTerm, rf.VotedFor, rf.commitIndex,
-	//	rf.lastApplied, rf.state, rf.voteCount, rf.Logs)
-	//
-	//if rf.state==LEADER {
-	//	return str1+fmt.Sprintf(" nextIdxs=[%v]\n matchIdxs=[%v]\n", rf.nextIndex, rf.matchIndex)
-	//} else {
-	//	return str1
-	//}
-
-	return fmt.Sprintf("me=%d, state=%d, SnapShotIndex=%d, Logs=%v\n", rf.me, rf.state, rf.SnapshotIndex, rf.Logs)
+	return fmt.Sprintf("me=%d, state=%d, SnapshotIdx=%d, commitIdx=%d, lastApplies=%d, Logs=%v\n",
+		rf.me, rf.state, rf.SnapshotIndex, rf.commitIndex,
+		rf.lastApplied, rf.Logs)
 }
 
 func (req *RequestVoteArgs) str() string {
@@ -943,4 +935,8 @@ func (req *AppendEntriesArgs) str() string {
 
 func (reply *AppendEntriesReply) str() string {
 	return fmt.Sprintf("T=%d, Success=%t, ConflictIdx=%d", reply.Term, reply.Success, reply.ConflictIndex)
+}
+
+func (req *InstallSnapshotArgs) str() string {
+	return fmt.Sprintf("T=%d, Leader=%d, LastIncludeIndex=%d, LastIncludeTerm=%d", req.Term, req.LeaderID, req.LastIncludedIndex, req.LastIncludedTerm)
 }

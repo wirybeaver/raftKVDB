@@ -218,13 +218,24 @@ func (kv *KVServer) dealWithApplyMsg (appliedMsg *raft.ApplyMsg) {
 			CmdID : operation.CmdID,
 		}
 
-		if kv.maxraftstate!=-1 && kv.rf.GetStateSize() > kv.maxraftstate {
-			go kv.rf.Compact(appliedMsg.CommandIndex, kv.encodeSnapShot())
+		if kv.maxraftstate!=-1 && kv.rf.GetStateSize() >= kv.maxraftstate {
+			w := new (bytes.Buffer)
+			e := labgob.NewEncoder(w)
+
+			e.Encode(kv.kvdb)
+			e.Encode(kv.dupMap)
+			DPrintf("me=%d, lastIncludeIdx=%d, Trigger Compact kvDB=%v\n DupMap=%v", kv.me, appliedMsg.CommandIndex, kv.kvdb, kv.dupMap)
+			go kv.rf.Compact(appliedMsg.CommandIndex, w.Bytes())
 		}
 
 	} else {
-		data := appliedMsg.SnapShot
-		kv.decodeSnapShot(data)
+		r := new(bytes.Buffer)
+		d := labgob.NewDecoder(r)
+		kv.kvdb = make(map[string]string)
+		kv.dupMap = make(map[uint64]uint64)
+		d.Decode(&kv.kvdb)
+		d.Decode(&kv.dupMap)
+		DPrintf("me=%d, Receive Snapshot kvDB=%v\n DupMap=%v", kv.me, kv.kvdb, kv.dupMap)
 	}
 }
 
@@ -264,24 +275,5 @@ func (kv *KVServer) seenCmd(clientID uint64, cmdID uint64) bool{
 	lastCmd,ok := kv.dupMap[clientID]
 	kv.mu.Unlock()
 	return ok && cmdID<=lastCmd
-}
-
-func (kv *KVServer) encodeSnapShot() []byte {
-	w := new (bytes.Buffer)
-	e := labgob.NewEncoder(w)
-
-	e.Encode(kv.kvdb)
-	e.Encode(kv.dupMap)
-
-	return w.Bytes()
-}
-
-func (kv *KVServer) decodeSnapShot(data []byte) {
-	r := new(bytes.Buffer)
-	d := labgob.NewDecoder(r)
-	kv.kvdb = make(map[string]string)
-	kv.dupMap = make(map[uint64]uint64)
-	d.Decode(&kv.kvdb)
-	d.Decode(&kv.dupMap)
 }
 
