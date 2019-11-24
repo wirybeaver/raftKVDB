@@ -144,8 +144,8 @@ func (rf *Raft) encodeState() []byte {
 	e := gob.NewEncoder(w)
 	e.Encode(rf.CurrentTerm)
 	e.Encode(rf.VotedFor)
-	e.Encode(rf.Logs)
 	e.Encode(rf.SnapshotIndex)
+	e.Encode(rf.Logs)
 	return w.Bytes()
 }
 
@@ -162,12 +162,14 @@ func (rf *Raft) decodeState(data []byte) {
 	d := gob.NewDecoder(r)
 	var currentTerm int
 	var votedFor int
+	var snapShotIndex int
 	var logs []LogEntry
-	if d.Decode(&currentTerm)!=nil ||d.Decode(&votedFor)!=nil || d.Decode(&logs)!=nil{
+	if d.Decode(&currentTerm)!=nil ||d.Decode(&votedFor)!=nil || d.Decode(&snapShotIndex)!=nil || d.Decode(&logs)!=nil{
 		DPrintf("Error: server %d fail to read Persisted state", rf.me)
 	} else {
 		rf.CurrentTerm = currentTerm
 		rf.VotedFor = votedFor
+		rf.SnapshotIndex = snapShotIndex
 		rf.Logs = logs
 	}
 }
@@ -375,7 +377,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	localLastIdx := len(rf.Logs) - 1
 	localPrevIdx := rf.logIdxGlobal2Local(args.PrevLogIndex)
 
-	// how to speed up consistency check if leader's snapshotIndex is less than follower's snapshotIndex?
+	//how to speed up consistency check if leader's snapshotIndex is less than follower's snapshotIndex?
 	if args.PrevLogIndex<=rf.SnapshotIndex {
 		reply.ConflictIndex = rf.SnapshotIndex + 1
 		DPrintf("[%d] recvAppend-Conflict from leader=[%d]\n rf=[%v]\n req=[%v]\n reply=[%v]", rf.me, args.LeaderID, rf.str(), args.str(), reply.str())
@@ -388,7 +390,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		// find the head index whose term is the same as PrevLog's term
 		var i = localPrevIdx
 		var t = rf.Logs[i].Term
-		for ; i>1; i-- {
+		for ; i>0; i-- {
 			if rf.Logs[i-1].Term != t {
 				break
 			}
@@ -599,8 +601,22 @@ func (rf *Raft) Compact(cmdIndex int, snapshot [] byte) {
 		return
 	}
 
-	//localSnapshotIndex := rf.logIdxGlobal2Local(cmdIndex)
+	localSnapshotIndex := rf.logIdxGlobal2Local(cmdIndex)
+	size := 1 + max(0, len(rf.Logs)-1-localSnapshotIndex)
+	newLog := make([]LogEntry, size)
+	newLog[0] = LogEntry{
+		Term: rf.Logs[localSnapshotIndex].Term,
+		Command: nil,
+	}
 
+	if size > 1 {
+		copy(newLog[1:], rf.Logs[localSnapshotIndex+1:])
+	}
+
+	rf.Logs = newLog
+	rf.SnapshotIndex = cmdIndex
+
+	rf.persister.SaveStateAndSnapshot(rf.encodeState(), snapshot)
 }
 
 //
@@ -673,6 +689,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	rf.CurrentTerm = 0
 	rf.VotedFor = -1
+	rf.SnapshotIndex = 0
 	// first log index is 1, thus we need a dummy log with index 0
 	rf.Logs = make([]LogEntry, 1)
 	rf.Logs[0] = LogEntry{
@@ -696,6 +713,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// initialize from state persisted before a crash
 	rf.dePersistState()
+	//rf.notifyAppUseNewSnapShot(rf.persister.ReadSnapshot())
 
 	go rf.electionDaemon()      // kick off election
 	go rf.applyLogEntryDaemon() // distinguished thread to apply log up through commitIdx
@@ -842,11 +860,11 @@ func max(a int, b int) int {
 }
 
 func (rf *Raft) logIdxLocal2Global(localIdx int) int {
-	return localIdx
+	return localIdx+rf.SnapshotIndex
 }
 
 func (rf *Raft) logIdxGlobal2Local(globalIdx int) int {
-	return globalIdx
+	return globalIdx-rf.SnapshotIndex
 }
 
 func (rf *Raft) resetTimer() {
