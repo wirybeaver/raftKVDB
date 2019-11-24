@@ -1,6 +1,8 @@
 package raftkv
 
 import (
+	"bytes"
+	"encoding/gob"
 	"log"
 	"raftKVDB/labgob"
 	"raftKVDB/labrpc"
@@ -178,37 +180,52 @@ func (kv *KVServer) enactDaemon(){
 	for {
 		select{
 		case appliedMsg := <-kv.applyCh :
-			operation := appliedMsg.Command.(Op)
-			//DPrintf("Server=%v, applyCh receive ClientID=%v, QueryID=%v, RaftLogID=%v, Op=%v",
-			//	kv.me, operation.ClientID, operation.CmdID, appliedMsg.CommandIndex, operation)
-			if appliedMsg.CommandValid {
-				kv.mu.Lock()
-				if recordedCmdID, ok := kv.dupMap[operation.ClientID]; !ok || recordedCmdID < operation.CmdID {
-					//DPrintf("Server=%v, Raft ClientID=%v, CmdID=%v, is a new command",
-					//	kv.me, operation.ClientID, operation.CmdID)
-					if operation.CmdType==PUT {
-						kv.kvdb[operation.Key] = operation.Val
-					} else if operation.CmdType==APPEND {
-						kv.kvdb[operation.Key] += operation.Val
-					}
-					kv.dupMap[operation.ClientID] = operation.CmdID
-				}
-
-				if _, ok := kv.applyStub[appliedMsg.CommandIndex]; !ok {
-					kv.applyStub[appliedMsg.CommandIndex] = make(chan DoneMsg, 1)
-				}
-				ch := kv.applyStub[appliedMsg.CommandIndex]
-				select {
-					case <- ch:
-					default:
-				}
-				ch <- DoneMsg{
-					ClientID : operation.ClientID,
-					CmdID : operation.CmdID,
-				}
-				kv.mu.Unlock()
-			}
+			kv.dealWithApplyMsg(&appliedMsg)
 		}
+	}
+}
+
+func (kv *KVServer) dealWithApplyMsg (appliedMsg *raft.ApplyMsg) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	if appliedMsg.CommandValid {
+		operation := appliedMsg.Command.(Op)
+		//DPrintf("Server=%v, applyCh receive ClientID=%v, QueryID=%v, RaftLogID=%v, Op=%v",
+		//	kv.me, operation.ClientID, operation.CmdID, appliedMsg.CommandIndex, operation)
+		if recordedCmdID, ok := kv.dupMap[operation.ClientID]; !ok || recordedCmdID < operation.CmdID {
+			//DPrintf("Server=%v, Raft ClientID=%v, CmdID=%v, is a new command",
+			//	kv.me, operation.ClientID, operation.CmdID)
+			if operation.CmdType==PUT {
+				kv.kvdb[operation.Key] = operation.Val
+			} else if operation.CmdType==APPEND {
+				kv.kvdb[operation.Key] += operation.Val
+			}
+			kv.dupMap[operation.ClientID] = operation.CmdID
+		}
+
+		if _, ok := kv.applyStub[appliedMsg.CommandIndex]; !ok {
+			kv.applyStub[appliedMsg.CommandIndex] = make(chan DoneMsg, 1)
+		}
+		ch := kv.applyStub[appliedMsg.CommandIndex]
+
+		// double delete dirty data
+		select {
+			case <- ch:
+			default:
+		}
+
+		ch <- DoneMsg{
+			ClientID : operation.ClientID,
+			CmdID : operation.CmdID,
+		}
+
+		if kv.maxraftstate!=-1 && kv.rf.GetStateSize() > kv.maxraftstate {
+			go kv.rf.Compact(appliedMsg.CommandIndex, kv.encodeSnapShot())
+		}
+
+	} else {
+		data := appliedMsg.SnapShot
+		kv.decodeSnapShot(data)
 	}
 }
 
@@ -249,3 +266,23 @@ func (kv *KVServer) seenCmd(clientID uint64, cmdID uint64) bool{
 	kv.mu.Unlock()
 	return ok && cmdID<=lastCmd
 }
+
+func (kv *KVServer) encodeSnapShot() []byte {
+	w := new (bytes.Buffer)
+	e := gob.NewEncoder(w)
+
+	e.Encode(kv.kvdb)
+	e.Encode(kv.dupMap)
+
+	return w.Bytes()
+}
+
+func (kv *KVServer) decodeSnapShot(data []byte) {
+	r := new(bytes.Buffer)
+	d := gob.NewDecoder(r)
+	kv.kvdb = make(map[string]string)
+	kv.dupMap = make(map[uint64]uint64)
+	d.Decode(&kv.kvdb)
+	d.Decode(&kv.dupMap)
+}
+

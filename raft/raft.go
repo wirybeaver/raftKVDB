@@ -120,37 +120,39 @@ func (rf *Raft) GetState() (int, bool) {
 	return term, isleader
 }
 
+func (rf *Raft) GetStateSize() int {
+	return rf.persister.RaftStateSize()
+}
+
 //
 // save Raft's persistent state to stable storage,
 // where it can later be retrieved after a crash and restart.
 // see paper's Figure 2 for a description of what should be persistent.
 //
-func (rf *Raft) persist() {
+func (rf *Raft) persistState() {
 	// Your code here (2C).
 	// Example:
-	w := new(bytes.Buffer)
-	e := gob.NewEncoder(w)
-	if e.Encode(rf.CurrentTerm)!=nil || e.Encode(rf.VotedFor)!=nil || e.Encode(rf.Logs)!=nil {
-		DPrintf("Error: server  %d fail to write Persisted state", rf.me)
-	} else {
-		data := w.Bytes()
-		rf.persister.SaveRaftState(data)
-	}
+	rf.persister.SaveRaftState(rf.encodeState())
+}
+
+func (rf *Raft) dePersistState() {
+	rf.decodeState(rf.persister.ReadRaftState())
 }
 
 func (rf *Raft) encodeState() []byte {
 	w := new(bytes.Buffer)
 	e := gob.NewEncoder(w)
-	if e.Encode(rf.CurrentTerm)!=nil || e.Encode(rf.VotedFor)!=nil || e.Encode(rf.Logs)!=nil || e.Encode(rf.SnapshotIndex)!=nil {
-		DPrintf("Error: server  %d fail to write Persisted state", rf.me)
-	}
+	e.Encode(rf.CurrentTerm)
+	e.Encode(rf.VotedFor)
+	e.Encode(rf.Logs)
+	e.Encode(rf.SnapshotIndex)
 	return w.Bytes()
 }
 
 //
 // restore previously persisted state.
 //
-func (rf *Raft) readPersist(data []byte) {
+func (rf *Raft) decodeState(data []byte) {
 	// Your code here (2C).
 	// Example:
 	if data == nil || len(data) < 1 { // bootstrap without any state?
@@ -237,7 +239,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		//}
 	}
 	if change {
-		rf.persist()
+		rf.persistState()
 	}
 	//else{
 	//	DPrintf("[%d] recvVote-NoVote-1 from candidate=[%d]\n req=[%v]\n reply=[]%v\n rf=[%v]", rf.me, args.CandidateID, args.str(), reply.str(), rf.str())
@@ -294,7 +296,7 @@ func (rf *Raft) sendRequestVoteAndProcess (args *RequestVoteArgs, sendTo int) {
 		rf.goBackToFollower()
 		rf.resetTimerCh <- struct{}{}
 		DPrintf("Cand [%d] sendVote-FOLLOW to peer=[%d]\n req=[%v]\n reply=[%v]\n rf=[%v]", rf.me, sendTo, args.str(), reply.str(), rf.str())
-		rf.persist()
+		rf.persistState()
 		return
 	}
 
@@ -373,6 +375,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	localLastIdx := len(rf.Logs) - 1
 	localPrevIdx := rf.logIdxGlobal2Local(args.PrevLogIndex)
 
+	// how to speed up consistency check if leader's snapshotIndex is less than follower's snapshotIndex?
 	if args.PrevLogIndex<=rf.SnapshotIndex {
 		reply.ConflictIndex = rf.SnapshotIndex + 1
 		DPrintf("[%d] recvAppend-Conflict from leader=[%d]\n rf=[%v]\n req=[%v]\n reply=[%v]", rf.me, args.LeaderID, rf.str(), args.str(), reply.str())
@@ -385,7 +388,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		// find the head index whose term is the same as PrevLog's term
 		var i = localPrevIdx
 		var t = rf.Logs[i].Term
-		for ; i>0; i-- {
+		for ; i>1; i-- {
 			if rf.Logs[i-1].Term != t {
 				break
 			}
@@ -420,7 +423,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	if change {
-		rf.persist()
+		rf.persistState()
 	}
 	//else {
 	//	DPrintf("[%d] recvAppend-Success-NoCommitUpdate from leader=[%d]\n rf=[%v]\n req=[%v]\n reply=[%v]", rf.me, args.LeaderID, rf.str(), args.str(), reply.str())
@@ -448,7 +451,7 @@ func (rf *Raft) sendAppendEntriesAndProcess(args *AppendEntriesArgs, server int)
 		rf.goBackToFollower()
 		rf.resetTimerCh <- struct{}{}
 		DPrintf("leader[%d] sendAppend-Follow to peer[%d]\n req=[%v]\n reply=[%v]\n rf=[%v]", rf.me, server, args.str(), reply.str(), rf.str())
-		rf.persist()
+		rf.persistState()
 		return
 	}
 	if reply.Success {
@@ -503,7 +506,7 @@ func (rf *Raft) InstallSnapShot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	defer rf.mu.Unlock()
 	if args.Term < rf.CurrentTerm {
 		reply.Term = rf.CurrentTerm
-		//DPrintf("[%d] recvAppend-StaleRequest from leader=[%d]\n rf=[%v]\n req=[%v]\n reply=[%v]", rf.me, args.LeaderID, rf.str(), args.str(), reply.str())
+		//DPrintf("[%d] recvInstallSnap-StaleReq from leader=[%d]\n rf=[%v]\n req=[%v]\n reply=[%v]", rf.me, args.LeaderID, rf.str(), args.str(), reply.str())
 		return
 	}
 
@@ -522,7 +525,7 @@ func (rf *Raft) InstallSnapShot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	rf.resetTimerCh <- struct{}{}
 	if args.LastIncludedIndex <= rf.SnapshotIndex {
 		if change {
-			rf.persist()
+			rf.persistState()
 		}
 		return
 	}
@@ -535,8 +538,8 @@ func (rf *Raft) InstallSnapShot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		Command: nil,
 	}
 	if size>1 {
-		localArgsLastIncludedTerm := rf.logIdxGlobal2Local(args.LastIncludedTerm)
-		copy(newLog[1:], rf.Logs[localArgsLastIncludedTerm+1:])
+		localArgsLastIncludedIndex := rf.logIdxGlobal2Local(args.LastIncludedIndex)
+		copy(newLog[1:], rf.Logs[localArgsLastIncludedIndex+1:])
 	}
 
 	if args.LastIncludedIndex > rf.lastApplied {
@@ -560,9 +563,44 @@ func (rf *Raft) notifyAppUseNewSnapShot(snapshot []byte) {
 		return
 	}
 	rf.applyCh <- ApplyMsg{
-		CommandValid:false,
+		CommandValid: false,
 		SnapShot: snapshot,
 	}
+}
+
+func (rf *Raft) sendSnapShot(args *InstallSnapshotArgs, reply *InstallSnapshotReply, server int) bool {
+	ok := rf.peers[server].Call("Raft.InstallSnapShot", args, reply)
+	return ok
+}
+
+func (rf *Raft) sendSnapShotAndProcess(args *InstallSnapshotArgs, server int) {
+	reply := &InstallSnapshotReply{}
+	ok := rf.sendSnapShot(args, reply, server)
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	if !ok || rf.state!=LEADER || rf.CurrentTerm > reply.Term {
+		return
+	}
+
+	if rf.CurrentTerm < reply.Term {
+		rf.CurrentTerm = reply.Term
+		rf.VotedFor = -1
+		rf.goBackToFollower()
+	}
+}
+
+func (rf *Raft) Compact(cmdIndex int, snapshot [] byte) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	if cmdIndex <= rf.SnapshotIndex {
+		return
+	}
+
+	//localSnapshotIndex := rf.logIdxGlobal2Local(cmdIndex)
+
 }
 
 //
@@ -595,7 +633,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		rf.nextIndex[rf.me] = index+1
 		rf.matchIndex[rf.me] = index
 		go rf.fastBroadCastNewCommand()
-		rf.persist()
+		rf.persistState()
 	}
 
 	return index, term, isLeader
@@ -657,7 +695,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.applyCh = applyCh
 
 	// initialize from state persisted before a crash
-	rf.readPersist(persister.ReadRaftState())
+	rf.dePersistState()
 
 	go rf.electionDaemon()      // kick off election
 	go rf.applyLogEntryDaemon() // distinguished thread to apply log up through commitIdx
@@ -705,7 +743,7 @@ func (rf *Raft) broadCastVote() {
 		go rf.sendRequestVoteAndProcess(voteReq, i)
 	}
 
-	rf.persist()
+	rf.persistState()
 }
 
 func (rf *Raft) heartBeatDaemon(){
@@ -743,7 +781,14 @@ func (rf *Raft) checkConsistency(to int) {
 	}
 	prevIdx := rf.nextIndex[to]-1
 	if prevIdx<=rf.SnapshotIndex {
-
+		args := &InstallSnapshotArgs{
+			Term: rf.CurrentTerm,
+			LeaderID: rf.me,
+			LastIncludedIndex: rf.SnapshotIndex,
+			LastIncludedTerm: rf.Logs[0].Term,
+			Snapshot: rf.persister.ReadSnapshot(),
+		}
+		go rf.sendSnapShotAndProcess(args, to)
 	} else {
 		localIdx := rf.logIdxGlobal2Local(prevIdx)
 		request := &AppendEntriesArgs{
