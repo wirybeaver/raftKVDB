@@ -2,7 +2,6 @@ package raftkv
 
 import (
 	"bytes"
-	"encoding/gob"
 	"log"
 	"raftKVDB/labgob"
 	"raftKVDB/labrpc"
@@ -269,7 +268,7 @@ func (kv *KVServer) seenCmd(clientID uint64, cmdID uint64) bool{
 
 func (kv *KVServer) encodeSnapShot() []byte {
 	w := new (bytes.Buffer)
-	e := gob.NewEncoder(w)
+	e := labgob.NewEncoder(w)
 
 	e.Encode(kv.kvdb)
 	e.Encode(kv.dupMap)
@@ -279,7 +278,7 @@ func (kv *KVServer) encodeSnapShot() []byte {
 
 func (kv *KVServer) decodeSnapShot(data []byte) {
 	r := new(bytes.Buffer)
-	d := gob.NewDecoder(r)
+	d := labgob.NewDecoder(r)
 	kv.kvdb = make(map[string]string)
 	kv.dupMap = make(map[uint64]uint64)
 	d.Decode(&kv.kvdb)
