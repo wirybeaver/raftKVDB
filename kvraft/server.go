@@ -224,7 +224,7 @@ func (kv *KVServer) dealWithApplyMsg (appliedMsg *raft.ApplyMsg) {
 
 			e.Encode(kv.kvdb)
 			e.Encode(kv.dupMap)
-			DPrintf("me=%d, lastIncludeIdx=%d, Trigger Compact kvDB=%v\n DupMap=%v", kv.me, appliedMsg.CommandIndex, kv.kvdb, kv.dupMap)
+			DPrintf("me=%d, lastIncludeIdx=%d, Trigger Compact kvDB=%v\n", kv.me, appliedMsg.CommandIndex, kv.kvdb)
 			go kv.rf.Compact(appliedMsg.CommandIndex, w.Bytes())
 		}
 
@@ -235,7 +235,7 @@ func (kv *KVServer) dealWithApplyMsg (appliedMsg *raft.ApplyMsg) {
 		kv.dupMap = make(map[uint64]uint64)
 		d.Decode(&kv.kvdb)
 		d.Decode(&kv.dupMap)
-		DPrintf("me=%d, Receive Snapshot kvDB=%v\n DupMap=%v", kv.me, kv.kvdb, kv.dupMap)
+		DPrintf("me=%d, Receive Snapshot kvDB=%v\n", kv.me, kv.kvdb)
 	}
 }
 

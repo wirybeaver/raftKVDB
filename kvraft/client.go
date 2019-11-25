@@ -62,10 +62,10 @@ func (ck *Clerk) Get(key string) string {
 
 		reply := &GetReply{}
 		ck.mu.Lock()
-		DPrintf("Client=%v, ToServer=%v, queryID=%v, send Query=%v", ck.clientID, ck.leadId, args.CmdID, args)
+		DPrintf("Client=%v, ToServer=%v, queryID=%v, GetKey=%v\n", ck.clientID, ck.leadId, args.CmdID, args.Key)
 		ok := ck.servers[ck.leadId].Call("KVServer.Get", args, reply)
-		DPrintf("Client=%v, ToServer=%v, queryID=%v, reply=%v, isLeader=%v", ck.clientID, ck.leadId, args.CmdID, reply, !reply.WrongLeader)
-		DPrintf("\n")
+		//DPrintf("Client=%v, ToServer=%v, queryID=%v, reply=%v, isLeader=%v", ck.clientID, ck.leadId, args.CmdID, reply, !reply.WrongLeader)
+		//DPrintf("\n")
 		ck.mu.Unlock()
 
 		if ok {
@@ -109,10 +109,10 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 			CmdID: cmdSeq,
 		}
 		reply := &PutAppendReply{}
-		DPrintf("Client=%v, ToServer=%v, queryID=%v, send Query=%v", ck.clientID, ck.leadId, args.CmdID, args)
+		DPrintf("Client=%v, ToServer=%v, queryID=%v, PutAppendKey=%v, PutAppendVal=%v\n", ck.clientID, ck.leadId, args.CmdID, args.Key, args.Value)
 		ok := ck.servers[ck.leadId].Call("KVServer.PutAppend", args, reply)
-		DPrintf("Client=%v, ToServer=%v, queryID=%v, reply=%v, isLeader=%v", ck.clientID, ck.leadId, args.CmdID, reply, !reply.WrongLeader)
-		DPrintf("\n")
+		//DPrintf("Client=%v, ToServer=%v, queryID=%v, reply=%v, isLeader=%v", ck.clientID, ck.leadId, args.CmdID, reply, !reply.WrongLeader)
+		//DPrintf("\n")
 		if ok {
 			if reply.Err==OK {
 				return
