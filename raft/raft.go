@@ -509,13 +509,13 @@ type InstallSnapshotReply struct {
 
 func (rf *Raft) InstallSnapShot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
 	rf.mu.Lock()
-	defer rf.mu.Unlock()
 	DPrintf("InstallSnapShot, Term=%d, Leader=%d, lastIncludeIndex=%d, lastIncludeTerm=%d, SnapShotSize=%d\n" +
 		" beginning raftState=%s",
 		args.Term, args.LeaderID, args.LastIncludedIndex, args.LastIncludedTerm, len(args.Snapshot), rf.str())
 	if args.Term < rf.CurrentTerm {
 		reply.Term = rf.CurrentTerm
 		//DPrintf("[%d] recvInstallSnap-StaleReq from leader=[%d]\n rf=[%v]\n req=[%v]\n reply=[%v]", rf.me, args.LeaderID, rf.str(), args.str(), reply.str())
+		rf.mu.Unlock()
 		return
 	}
 
@@ -536,6 +536,7 @@ func (rf *Raft) InstallSnapShot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		if change {
 			rf.persistState()
 		}
+		rf.mu.Unlock()
 		return
 	}
 
@@ -569,7 +570,8 @@ func (rf *Raft) InstallSnapShot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	state := rf.encodeState()
 	rf.persister.SaveStateAndSnapshot(state, args.Snapshot)
 	DPrintf("After install, the lengh of snapshotSize=%d", len(args.Snapshot))
-	go rf.notifyAppUseNewSnapShot(args.Snapshot)
+	rf.mu.Unlock()
+	rf.notifyAppUseNewSnapShot(args.Snapshot)
 }
 
 func (rf *Raft) notifyAppUseNewSnapShot(snapshot []byte) {
