@@ -2,6 +2,7 @@ package raftkv
 
 import (
 	"bytes"
+	"encoding/gob"
 	"log"
 	"raftKVDB/labgob"
 	"raftKVDB/labrpc"
@@ -220,19 +221,18 @@ func (kv *KVServer) dealWithApplyMsg (appliedMsg *raft.ApplyMsg) {
 
 		if kv.maxraftstate!=-1 && kv.rf.GetStateSize() >= kv.maxraftstate {
 			w := new (bytes.Buffer)
-			e := labgob.NewEncoder(w)
-			snapshot := w.Bytes()
-
+			e := gob.NewEncoder(w)
 			e.Encode(kv.Kvdb)
 			e.Encode(kv.DupMap)
+			snapshot := w.Bytes()
 			DPrintf("me=%d, lastIncludeIdx=%d, Trigger Compact kvDB=%v\n Snapshot size=%v", kv.me, appliedMsg.CommandIndex, kv.Kvdb, len(snapshot))
 
 			go kv.rf.Compact(appliedMsg.CommandIndex, snapshot)
 		}
 
 	} else {
-		r := new(bytes.Buffer)
-		d := labgob.NewDecoder(r)
+		r := bytes.NewBuffer(appliedMsg.SnapShot)
+		d := gob.NewDecoder(r)
 		kv.Kvdb = make(map[string]string)
 		kv.DupMap = make(map[uint64]uint64)
 		d.Decode(&kv.Kvdb)

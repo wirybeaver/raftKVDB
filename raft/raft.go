@@ -19,9 +19,9 @@ package raft
 
 import (
 	"bytes"
-	"raftKVDB/labgob"
-
+	"encoding/gob"
 	"fmt"
+
 	//"log/syslog"
 	"math/rand"
 	"sync"
@@ -142,7 +142,7 @@ func (rf *Raft) dePersistState() {
 
 func (rf *Raft) encodeState() []byte {
 	w := new(bytes.Buffer)
-	e := labgob.NewEncoder(w)
+	e := gob.NewEncoder(w)
 	e.Encode(rf.CurrentTerm)
 	e.Encode(rf.VotedFor)
 	e.Encode(rf.SnapshotIndex)
@@ -160,7 +160,7 @@ func (rf *Raft) decodeState(data []byte) {
 		return
 	}
 	r := bytes.NewBuffer(data)
-	d := labgob.NewDecoder(r)
+	d := gob.NewDecoder(r)
 	var currentTerm int
 	var votedFor int
 	var snapShotIndex int
@@ -510,9 +510,9 @@ type InstallSnapshotReply struct {
 func (rf *Raft) InstallSnapShot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	DPrintf("InstallSnapShot, Term=%d, Leader=%d, lastIncludeIndex=%d, lastIncludeTerm=%d\n" +
+	DPrintf("InstallSnapShot, Term=%d, Leader=%d, lastIncludeIndex=%d, lastIncludeTerm=%d, SnapShotSize=%d\n" +
 		" beginning raftState=%s",
-		args.Term, args.LeaderID, args.LastIncludedIndex, args.LastIncludedTerm, rf.str())
+		args.Term, args.LeaderID, args.LastIncludedIndex, args.LastIncludedTerm, len(args.Snapshot), rf.str())
 	if args.Term < rf.CurrentTerm {
 		reply.Term = rf.CurrentTerm
 		//DPrintf("[%d] recvInstallSnap-StaleReq from leader=[%d]\n rf=[%v]\n req=[%v]\n reply=[%v]", rf.me, args.LeaderID, rf.str(), args.str(), reply.str())
@@ -562,12 +562,13 @@ func (rf *Raft) InstallSnapShot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	rf.Logs = newLog
 	rf.SnapshotIndex = args.LastIncludedIndex
 
-	DPrintf("InstallSnapShot, Term=%d, Leader=%d, lastIncludeIndex=%d, lastIncludeTerm=%d\n" +
+	DPrintf("InstallSnapShot, Term=%d, Leader=%d, lastIncludeIndex=%d, lastIncludeTerm=%d, SnapshotSize=%d\n" +
 		" ending raftState=%s",
-		args.Term, args.LeaderID, args.LastIncludedIndex, args.LastIncludedTerm, rf.str())
+		args.Term, args.LeaderID, args.LastIncludedIndex, args.LastIncludedTerm, len(args.Snapshot), rf.str())
 
 	state := rf.encodeState()
 	rf.persister.SaveStateAndSnapshot(state, args.Snapshot)
+	DPrintf("After install, the lengh of snapshotSize=%d", len(args.Snapshot))
 	go rf.notifyAppUseNewSnapShot(args.Snapshot)
 }
 
@@ -836,6 +837,7 @@ func (rf *Raft) checkConsistency(to int) {
 			LastIncludedTerm: rf.Logs[0].Term,
 			Snapshot: rf.persister.ReadSnapshot(),
 		}
+		DPrintf("Leader=%d, SendSnapshotSize=%d", rf.me, len(args.Snapshot))
 		go rf.sendSnapShotAndProcess(args, to)
 	} else {
 		localIdx := rf.logIdxGlobal2Local(prevIdx)
