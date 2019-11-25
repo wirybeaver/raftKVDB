@@ -610,8 +610,10 @@ func (rf *Raft) Compact(cmdIndex int, snapshot [] byte) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	DPrintf("KV peer send LastIncludeIdx=[%v]", cmdIndex)
-	DPrintf("Before compact: %s", rf.str())
+	//if rf.state==LEADER {
+	//	DPrintf("KV peer send LastIncludeIdx=[%v]", cmdIndex)
+	//	DPrintf("Before compact: %s", rf.str())
+	//}
 
 
 	if cmdIndex <= rf.SnapshotIndex {
@@ -639,7 +641,9 @@ func (rf *Raft) Compact(cmdIndex int, snapshot [] byte) {
 	rf.SnapshotIndex = cmdIndex
 	raftState := rf.encodeState()
 
-	DPrintf("After compact: %s", rf.str())
+	if rf.state == LEADER {
+		DPrintf("After compact RAFT=%s", rf.str())
+	}
 
 	rf.persister.SaveStateAndSnapshot(raftState, snapshot)
 }
@@ -824,6 +828,7 @@ func (rf *Raft) checkConsistency(to int) {
 	}
 	prevIdx := rf.nextIndex[to]-1
 	if prevIdx<rf.SnapshotIndex {
+
 		args := &InstallSnapshotArgs{
 			Term: rf.CurrentTerm,
 			LeaderID: rf.me,
