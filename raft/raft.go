@@ -478,14 +478,12 @@ func (rf *Raft) sendAppendEntriesAndProcess(args *AppendEntriesArgs, server int)
 				rf.commitIndex = N
 				//DPrintf("leader[%d] sendAppend-Success-Majority to peer[%d]\n req=[%v]\n reply=[%v]\n rf=[%v]", rf.me, server, args.str(), reply.str(), rf.str())
 				rf.commitCh <- struct{}{}
+			} else {
+				//DPrintf("leader[%d] sendAppend-Success-NotMajority to peer[%d]\n req=[%v]\n reply=[%v]\n rf=[%v]", rf.me, server, args.str(), reply.str(), rf.str())
 			}
-			//else {
-			//	DPrintf("leader[%d] sendAppend-Success-NotMajority to peer[%d]\n req=[%v]\n reply=[%v]\n rf=[%v]", rf.me, server, args.str(), reply.str(), rf.str())
-			//}
+		} else{
+			//DPrintf("leader[%d] sendAppend-Success-StaleReplyOrHeartReply to peer[%d]\n req=[%v]\n reply=[%v]\n rf=[%v]", rf.me, server, args.str(), reply.str(), rf.str())
 		}
-		//else{
-		//	DPrintf("leader[%d] sendAppend-Success-StaleReplyOrHeartReply to peer[%d]\n req=[%v]\n reply=[%v]\n rf=[%v]", rf.me, server, args.str(), reply.str(), rf.str())
-		//}
 	} else {
 		rf.nextIndex[server] = max(1, reply.ConflictIndex)
 		go rf.backupOverIncorrectFollowerLogs(server)
@@ -569,7 +567,7 @@ func (rf *Raft) InstallSnapShot(args *InstallSnapshotArgs, reply *InstallSnapsho
 
 	state := rf.encodeState()
 	rf.persister.SaveStateAndSnapshot(state, args.Snapshot)
-	DPrintf("After install, the lengh of snapshotSize=%d", len(args.Snapshot))
+	//DPrintf("After install, the lengh of snapshotSize=%d", len(args.Snapshot))
 	rf.mu.Unlock()
 	rf.notifyAppUseNewSnapShot(args.Snapshot)
 }
@@ -620,6 +618,7 @@ func (rf *Raft) Compact(cmdIndex int, snapshot [] byte) {
 
 
 	if cmdIndex <= rf.SnapshotIndex {
+		DPrintf("raft=%v, receive Stale lastIncludeIndex=%s, RAFT=%s", cmdIndex, rf.me, rf.str())
 		return
 	}
 
@@ -645,7 +644,7 @@ func (rf *Raft) Compact(cmdIndex int, snapshot [] byte) {
 	raftState := rf.encodeState()
 
 	if rf.state == LEADER {
-		DPrintf("After compact RAFT=%s", rf.str())
+		DPrintf("raft=%v, receive lastIncludeIndex=%s, After compact RAFT=%s", cmdIndex, rf.me, rf.str())
 	}
 
 	rf.persister.SaveStateAndSnapshot(raftState, snapshot)
@@ -767,7 +766,7 @@ func (rf *Raft) electionDaemon() {
 }
 
 func (rf *Raft) broadCastVote() {
-	//DPrintf("[%d] Became Candidate", rf.me)
+	DPrintf("[%d] Became Candidate", rf.me)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if rf.state == LEADER {
@@ -839,7 +838,7 @@ func (rf *Raft) checkConsistency(to int) {
 			LastIncludedTerm: rf.Logs[0].Term,
 			Snapshot: rf.persister.ReadSnapshot(),
 		}
-		DPrintf("Leader=%d, SendSnapshotSize=%d", rf.me, len(args.Snapshot))
+		//DPrintf("Leader=%d, SendSnapshotSize=%d", rf.me, len(args.Snapshot))
 		go rf.sendSnapShotAndProcess(args, to)
 	} else {
 		localIdx := rf.logIdxGlobal2Local(prevIdx)
@@ -865,17 +864,17 @@ func (rf *Raft) applyLogEntryDaemon() {
 		for i := start; i<=end; i++ {
 			if i<=rf.SnapshotIndex {
 				i = rf.SnapshotIndex
-				continue
-			}
-			idx := rf.logIdxGlobal2Local(i)
-			rf.applyCh <- ApplyMsg{
-				Command: rf.Logs[idx].Command,
-				CommandIndex: i,
-				CommandValid: true,
+			} else {
+				idx := rf.logIdxGlobal2Local(i)
+				rf.applyCh <- ApplyMsg{
+					Command: rf.Logs[idx].Command,
+					CommandIndex: i,
+					CommandValid: true,
+				}
+				rf.lastApplied=i
 			}
 		}
 		//rf.mu.Lock()
-		rf.lastApplied=end
 		rf.mu.Unlock()
 	}
 }
@@ -924,7 +923,7 @@ func (rf *Raft) goBackToFollower(){
 }
 
 func (rf *Raft) str() string {
-	return fmt.Sprintf("me=%d, state=%d, SnapshotIdx=%d, commitIdx=%d, lastApplies=%d, Logs=%v\n",
+	return fmt.Sprintf("raftID=%d, state=%d, SnapshotIdx=%d, commitIdx=%d, lastApplies=%d, Logs=%v\n",
 		rf.me, rf.state, rf.SnapshotIndex, rf.commitIndex,
 		rf.lastApplied, rf.Logs)
 }

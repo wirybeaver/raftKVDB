@@ -109,7 +109,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 			CmdID: cmdSeq,
 		}
 		reply := &PutAppendReply{}
-		DPrintf("Client=%v, ToServer=%v, queryID=%v, Type=%v, PutAppendKey=%v, PutAppendVal=%v\n", ck.clientID, ck.leadId, args.CmdID, args.Op, args.Key, args.Value)
+//		DPrintf("Client=%v, ToServer=%v, queryID=%v, Type=%v, PutAppendKey=%v, PutAppendVal=%v \n", ck.clientID, ck.leadId, args.CmdID, args.Op, args.Key, args.Value)
 		ok := ck.servers[ck.leadId].Call("KVServer.PutAppend", args, reply)
 		//DPrintf("Client=%v, ToServer=%v, queryID=%v, reply=%v, isLeader=%v", ck.clientID, ck.leadId, args.CmdID, reply, !reply.WrongLeader)
 		//DPrintf("\n")

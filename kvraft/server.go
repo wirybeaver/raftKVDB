@@ -3,6 +3,7 @@ package raftkv
 import (
 	"bytes"
 	"encoding/gob"
+	"fmt"
 	"log"
 	"raftKVDB/labgob"
 	"raftKVDB/labrpc"
@@ -11,7 +12,7 @@ import (
 	"time"
 )
 
-const Debug = 0
+const Debug = 1
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug > 0 {
@@ -190,8 +191,7 @@ func (kv *KVServer) dealWithApplyMsg (appliedMsg *raft.ApplyMsg) {
 	defer kv.mu.Unlock()
 	if appliedMsg.CommandValid {
 		operation := appliedMsg.Command.(Op)
-		//DPrintf("Server=%v, applyCh receive ClientID=%v, QueryID=%v, RaftLogID=%v, Op=%v",
-		//	kv.me, operation.ClientID, operation.CmdID, appliedMsg.CommandIndex, operation)
+		DPrintf("kvserver=%v, Read Command from Apply Channel\nCommand=%v\nKVServerState=%v", kv.me, operation.str(), kv.str())
 		if recordedCmdID, ok := kv.DupMap[operation.ClientID]; !ok || recordedCmdID < operation.CmdID {
 			//DPrintf("Server=%v, Raft ClientID=%v, CmdID=%v, is a new command",
 			//	kv.me, operation.ClientID, operation.CmdID)
@@ -219,13 +219,14 @@ func (kv *KVServer) dealWithApplyMsg (appliedMsg *raft.ApplyMsg) {
 			CmdID : operation.CmdID,
 		}
 
+		DPrintf("kvserver=%v, After read command from Apply Channel\nCommand=%v\nKVServer=%v\n", kv.me, operation.str(), kv.str())
 		if kv.maxraftstate!=-1 && kv.rf.GetStateSize() >= kv.maxraftstate {
 			w := new (bytes.Buffer)
 			e := gob.NewEncoder(w)
 			e.Encode(kv.Kvdb)
 			e.Encode(kv.DupMap)
 			snapshot := w.Bytes()
-			DPrintf("me=%d, lastIncludeIdx=%d, Trigger Compact kvDB=%v\n Snapshot size=%v", kv.me, appliedMsg.CommandIndex, kv.Kvdb, len(snapshot))
+			//DPrintf("me=%d, lastIncludeIdx=%d, Trigger Compact kvDB=%v\n Snapshot size=%v", kv.me, appliedMsg.CommandIndex, kv.Kvdb, len(snapshot))
 
 			go kv.rf.Compact(appliedMsg.CommandIndex, snapshot)
 		}
@@ -237,7 +238,8 @@ func (kv *KVServer) dealWithApplyMsg (appliedMsg *raft.ApplyMsg) {
 		kv.DupMap = make(map[uint64]uint64)
 		d.Decode(&kv.Kvdb)
 		d.Decode(&kv.DupMap)
-		DPrintf("me=%d, Receive Snapshot kvDB=%v\n", kv.me, kv.Kvdb)
+		DPrintf("kvserver=%d, Receive Snapshot\n" +
+			"KVServerState=%v\n\n", kv.me, kv.str())
 	}
 }
 
@@ -277,5 +279,13 @@ func (kv *KVServer) seenCmd(clientID uint64, cmdID uint64) bool{
 	lastCmd,ok := kv.DupMap[clientID]
 	kv.mu.Unlock()
 	return ok && cmdID<=lastCmd
+}
+
+func (op *Op) str() string{
+	return fmt.Sprintf("ClientID=%v, CmdID=%v, CmdType=%v, Key=%v, Val=%v\n", op.ClientID, op.CmdID, op.CmdType, op.Key, op.Val)
+}
+
+func (kv *KVServer) str() string {
+	return fmt.Sprintf("Database=%v\nDupCmd=%v\n", kv.Kvdb, kv.DupMap)
 }
 
