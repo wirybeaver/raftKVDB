@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const Debug = 1
+const Debug = 0
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug > 0 {
@@ -191,7 +191,7 @@ func (kv *KVServer) dealWithApplyMsg (appliedMsg *raft.ApplyMsg) {
 	defer kv.mu.Unlock()
 	if appliedMsg.CommandValid {
 		operation := appliedMsg.Command.(Op)
-		DPrintf("kvserver=%v, Read Command from Apply Channel\nCommand=%v\nKVServerState=%v", kv.me, operation.str(), kv.str())
+		//DPrintf("kvserver=%v, Read from ApplyCh, CommandRaftIdx=%v, Command=%v, KVServerState=%v", kv.me, appliedMsg.CommandIndex, operation.str(), kv.str())
 		if recordedCmdID, ok := kv.DupMap[operation.ClientID]; !ok || recordedCmdID < operation.CmdID {
 			//DPrintf("Server=%v, Raft ClientID=%v, CmdID=%v, is a new command",
 			//	kv.me, operation.ClientID, operation.CmdID)
@@ -219,14 +219,14 @@ func (kv *KVServer) dealWithApplyMsg (appliedMsg *raft.ApplyMsg) {
 			CmdID : operation.CmdID,
 		}
 
-		DPrintf("kvserver=%v, After read command from Apply Channel\nCommand=%v\nKVServer=%v\n", kv.me, operation.str(), kv.str())
+		DPrintf("kvserver=%d, Write CommandRaftIdx=%v, Command=%vKVServerState:%s\n", kv.me, appliedMsg.CommandIndex, operation.str(), kv.str())
 		if kv.maxraftstate!=-1 && kv.rf.GetStateSize() >= kv.maxraftstate {
 			w := new (bytes.Buffer)
 			e := gob.NewEncoder(w)
 			e.Encode(kv.Kvdb)
 			e.Encode(kv.DupMap)
 			snapshot := w.Bytes()
-			//DPrintf("me=%d, lastIncludeIdx=%d, Trigger Compact kvDB=%v\n Snapshot size=%v", kv.me, appliedMsg.CommandIndex, kv.Kvdb, len(snapshot))
+			//DPrintf("kvserver=%d, send lastIncludeIdx=%d, Trigger Compact kvDB=%v\n Snapshot size=%v", kv.me, appliedMsg.CommandIndex, kv.Kvdb, len(snapshot))
 
 			go kv.rf.Compact(appliedMsg.CommandIndex, snapshot)
 		}
@@ -238,8 +238,7 @@ func (kv *KVServer) dealWithApplyMsg (appliedMsg *raft.ApplyMsg) {
 		kv.DupMap = make(map[uint64]uint64)
 		d.Decode(&kv.Kvdb)
 		d.Decode(&kv.DupMap)
-		DPrintf("kvserver=%d, Receive Snapshot\n" +
-			"KVServerState=%v\n\n", kv.me, kv.str())
+		DPrintf("kvserver=%d, Receive Snapshot\nKVserverState:%s\n",kv.me, kv.str())
 	}
 }
 
