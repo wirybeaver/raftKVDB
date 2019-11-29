@@ -226,8 +226,6 @@ func (kv *KVServer) dealWithApplyMsg (appliedMsg *raft.ApplyMsg) {
 			e.Encode(kv.Kvdb)
 			e.Encode(kv.DupMap)
 			snapshot := w.Bytes()
-			//DPrintf("kvserver=%d, send lastIncludeIdx=%d, Trigger Compact kvDB=%v\n Snapshot size=%v", kv.me, appliedMsg.CommandIndex, kv.Kvdb, len(snapshot))
-
 			go kv.rf.Compact(appliedMsg.CommandIndex, snapshot)
 		}
 
