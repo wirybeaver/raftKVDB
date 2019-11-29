@@ -113,3 +113,26 @@ Test: unreliable net, restarts, partitions, many clients, linearizability checks
 PASS
 ok      raftKVDB/kvraft 234.067s
 ```
+
+- [x] 3B Snapshot
+```
+➜  kvraft git:(master) go test -run 3B                               
+Test: InstallSnapshot RPC (3B) ...
+  ... Passed --   2.5  3  6582   63
+Test: snapshot size is reasonable (3B) ...
+  ... Passed --   0.7  3  9563  800
+Test: restarts, snapshots, one client (3B) ...
+  ... Passed --  19.5  5 114446 18499
+Test: restarts, snapshots, many clients (3B) ...
+  ... Passed --  19.4  5 205134 22519
+Test: unreliable net, snapshots, many clients (3B) ...
+  ... Passed --  15.7  5 12159 1800
+Test: unreliable net, restarts, snapshots, many clients (3B) ...
+  ... Passed --  20.4  5 13122 1821
+Test: unreliable net, restarts, partitions, snapshots, many clients (3B) ...
+  ... Passed --  27.4  5  7499  877
+Test: unreliable net, restarts, partitions, snapshots, many clients, linearizability checks (3B) ...
+  ... Passed --  25.4  7 22072 1588
+PASS
+ok      raftKVDB/kvraft 131.119s
+```
